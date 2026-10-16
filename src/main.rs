@@ -8,9 +8,11 @@ use config::{ClickAction, QDeckConfig, ResolvedTheme};
 use image::DynamicImage;
 use std::collections::HashSet;
 use std::env;
+use std::ffi::{c_char, c_void};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 use streamdeck::{Colour, Kind, StreamDeck, pids};
@@ -23,7 +25,107 @@ use widgets::{
 use xplane::{A320FcuState, XPlaneClient};
 
 const TAP_HIGHLIGHT_DURATION: Duration = Duration::from_millis(120);
+const MAX_BLOCK_WAIT: Duration = Duration::from_millis(150);
 const LAUNCH_AGENT_LABEL: &str = "local.qdeck";
+
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn handle_shutdown_signal(_sig: i32) {
+    SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+unsafe extern "C" {
+    fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGMainDisplayID() -> u32;
+    fn CGDisplayIsAsleep(display: u32) -> u8;
+    fn CGSessionCopyCurrentDictionary() -> *const c_void;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFStringCreateWithCString(
+        alloc: *const c_void,
+        c_str: *const c_char,
+        encoding: u32,
+    ) -> *const c_void;
+    fn CFDictionaryGetValue(the_dict: *const c_void, key: *const c_void) -> *const c_void;
+    fn CFBooleanGetValue(boolean: *const c_void) -> u8;
+    fn CFRelease(cf: *const c_void);
+}
+
+const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+fn install_signal_handlers() {
+    const SIGHUP: i32 = 1;
+    const SIGINT: i32 = 2;
+    const SIGQUIT: i32 = 3;
+    const SIGTERM: i32 = 15;
+    unsafe {
+        signal(SIGHUP, handle_shutdown_signal);
+        signal(SIGINT, handle_shutdown_signal);
+        signal(SIGQUIT, handle_shutdown_signal);
+        signal(SIGTERM, handle_shutdown_signal);
+    }
+}
+
+/// Checks via macOS CoreGraphics whether the main display is asleep or the user session screen is locked.
+fn is_macos_screen_locked_or_asleep() -> bool {
+    unsafe {
+        if CGDisplayIsAsleep(CGMainDisplayID()) != 0 {
+            return true;
+        }
+
+        let dict = CGSessionCopyCurrentDictionary();
+        if dict.is_null() {
+            return false;
+        }
+
+        let locked_key = CFStringCreateWithCString(
+            std::ptr::null(),
+            c"CGSSessionScreenIsLocked".as_ptr(),
+            K_CF_STRING_ENCODING_UTF8,
+        );
+        let mut is_locked = false;
+        if !locked_key.is_null() {
+            let val = CFDictionaryGetValue(dict, locked_key);
+            if !val.is_null() && CFBooleanGetValue(val) != 0 {
+                is_locked = true;
+            }
+            CFRelease(locked_key);
+        }
+
+        if !is_locked {
+            let console_key = CFStringCreateWithCString(
+                std::ptr::null(),
+                c"kCGSSessionOnConsoleKey".as_ptr(),
+                K_CF_STRING_ENCODING_UTF8,
+            );
+            if !console_key.is_null() {
+                let val = CFDictionaryGetValue(dict, console_key);
+                if !val.is_null() && CFBooleanGetValue(val) == 0 {
+                    is_locked = true;
+                }
+                CFRelease(console_key);
+            }
+        }
+
+        CFRelease(dict);
+        is_locked
+    }
+}
+
+/// Blanks all keys to pure black (`#000000`) and turns Stream Deck brightness down to `0%`.
+fn blank_and_sleep_deck(deck: &mut StreamDeck, total_keys: u8) {
+    let black = Colour { r: 0, g: 0, b: 0 };
+    for k in 0..total_keys {
+        let _ = deck.set_button_rgb(k, &black);
+    }
+    let _ = deck.set_brightness(0);
+}
 
 fn cols_for_kind(kind: Kind) -> u8 {
     match kind {
@@ -492,8 +594,12 @@ fn run_deck_session(
     let mut prev_buttons = vec![0u8; total_keys as usize];
     let mut highlight_until: Vec<Option<Instant>> = vec![None; total_keys as usize];
     let mut core_buf: Vec<f32> = Vec::with_capacity(32);
+    let mut screen_locked = is_macos_screen_locked_or_asleep();
 
-    {
+    if screen_locked {
+        println!("[QDECK] Mac display is locked/asleep — blanking Stream Deck");
+        blank_and_sleep_deck(&mut deck, total_keys);
+    } else {
         let total_modes = modes.len().max(1);
         let active_mode = &modes[*mode_idx];
         let next_mode = &modes[(*mode_idx + 1) % total_modes];
@@ -525,6 +631,57 @@ fn run_deck_session(
     let mut last_render = Instant::now();
 
     loop {
+        if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+            println!("[QDECK] Shutdown signal received — blanking Stream Deck and exiting.");
+            blank_and_sleep_deck(&mut deck, total_keys);
+            return Ok(true);
+        }
+
+        // Check if macOS display lock or sleep state changed
+        let now_locked = is_macos_screen_locked_or_asleep();
+        if now_locked != screen_locked {
+            screen_locked = now_locked;
+            if screen_locked {
+                println!("[QDECK] Mac display locked/asleep — blanking Stream Deck screen");
+                highlight_until.fill(None);
+                blank_and_sleep_deck(&mut deck, total_keys);
+            } else {
+                println!("[QDECK] Mac display unlocked — restoring Stream Deck display");
+                let total_modes = modes.len().max(1);
+                let active_mode = &modes[*mode_idx];
+                let next_mode = &modes[(*mode_idx + 1) % total_modes];
+                let snapshot = build_snapshot(
+                    sys,
+                    &mut core_buf,
+                    *gpu_cores,
+                    *live_gpu_pct,
+                    active_mode,
+                    next_mode,
+                    *mode_idx,
+                    total_modes,
+                    &xplane.state,
+                    *tick,
+                    false,
+                );
+                apply_mode_layout(&mut deck, cfg, theme, cols, total_keys, img_w, img_h, &snapshot)?;
+                last_render = Instant::now();
+            }
+        }
+
+        if screen_locked {
+            // While locked, drain button events without acting on them and keep the deck black
+            match deck.read_buttons(Some(MAX_BLOCK_WAIT)) {
+                Ok(buttons) => {
+                    prev_buttons = buttons;
+                }
+                Err(streamdeck::Error::NoData) => {}
+                Err(e) => {
+                    return Err(anyhow!("Stream Deck USB read error: {e}"));
+                }
+            }
+            continue;
+        }
+
         let refresh_interval = Duration::from_millis(cfg.refresh_ms.max(250));
         let now = Instant::now();
 
@@ -536,8 +693,13 @@ fn run_deck_session(
             .min();
 
         let wait_duration = match next_highlight_expiry {
-            Some(h_wait) => next_telemetry_in.min(h_wait).max(Duration::from_millis(1)),
-            None => next_telemetry_in.max(Duration::from_millis(1)),
+            Some(h_wait) => next_telemetry_in
+                .min(h_wait)
+                .min(MAX_BLOCK_WAIT)
+                .max(Duration::from_millis(1)),
+            None => next_telemetry_in
+                .min(MAX_BLOCK_WAIT)
+                .max(Duration::from_millis(1)),
         };
 
         let mut newly_highlighted_keys: Vec<u8> = Vec::new();
@@ -615,6 +777,12 @@ fn run_deck_session(
             Err(e) => {
                 return Err(anyhow!("Stream Deck USB read error: {e}"));
             }
+        }
+
+        if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+            println!("[QDECK] Shutdown signal received — blanking Stream Deck and exiting.");
+            blank_and_sleep_deck(&mut deck, total_keys);
+            return Ok(true);
         }
 
         // Expire any finished 120ms tap flashes
@@ -830,6 +998,7 @@ fn run_deck_session(
             *tick += 1;
             if let Some(max) = max_frames {
                 if *tick >= max {
+                    blank_and_sleep_deck(&mut deck, total_keys);
                     return Ok(true);
                 }
             }
@@ -838,6 +1007,8 @@ fn run_deck_session(
 }
 
 fn main() -> Result<()> {
+    install_signal_handlers();
+
     let args: Vec<String> = env::args().collect();
     let mut custom_config: Option<PathBuf> = None;
     let mut max_frames: Option<u64> = None;
@@ -900,7 +1071,7 @@ fn main() -> Result<()> {
     let mut tick: u64 = 0;
     let mut logged_waiting = false;
 
-    loop {
+    while !SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
         match connect_deck(&cfg) {
             Ok(deck) => {
                 logged_waiting = false;
@@ -922,6 +1093,9 @@ fn main() -> Result<()> {
                     Ok(true) => break,
                     Ok(false) => {}
                     Err(e) => {
+                        if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+                            break;
+                        }
                         eprintln!(
                             "[QDECK] Stream Deck disconnected ({e}). Reconnecting in 2s..."
                         );
@@ -934,7 +1108,12 @@ fn main() -> Result<()> {
                     eprintln!("[QDECK] {e} — retrying every 3s...");
                     logged_waiting = true;
                 }
-                thread::sleep(Duration::from_secs(3));
+                for _ in 0..20 {
+                    if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(150));
+                }
             }
         }
     }
