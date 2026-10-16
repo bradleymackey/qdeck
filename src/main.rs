@@ -11,6 +11,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 use streamdeck::{Colour, Kind, StreamDeck, pids};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
@@ -22,6 +23,7 @@ use widgets::{
 use xplane::{A320FcuState, XPlaneClient};
 
 const TAP_HIGHLIGHT_DURATION: Duration = Duration::from_millis(120);
+const LAUNCH_AGENT_LABEL: &str = "local.qdeck";
 
 fn cols_for_kind(kind: Kind) -> u8 {
     match kind {
@@ -102,7 +104,7 @@ fn connect_deck(cfg: &QDeckConfig) -> Result<StreamDeck> {
 
     StreamDeck::connect(cfg.vid, pids::MK2, cfg.serial.clone()).map_err(|e| {
         anyhow!(
-            "Could not connect to Stream Deck: {e}. Make sure the official Elgato Stream Deck app is closed or not holding exclusive HID access."
+            "Could not connect to Stream Deck: {e}. Make sure the Stream Deck is plugged in and the official Elgato app is closed."
         )
     })
 }
@@ -114,7 +116,16 @@ fn file_mtime(path: &Path) -> Option<SystemTime> {
 fn is_dynamic_telemetry_tile(tile_type: &str) -> bool {
     matches!(
         tile_type.trim().to_ascii_lowercase().as_str(),
-        "cpu" | "gpu" | "memory" | "ram" | "ops_status" | "status" | "a320_fcu" | "xplane" | "fcu" | "a320"
+        "cpu"
+            | "gpu"
+            | "memory"
+            | "ram"
+            | "ops_status"
+            | "status"
+            | "a320_fcu"
+            | "xplane"
+            | "fcu"
+            | "a320"
     )
 }
 
@@ -213,7 +224,7 @@ fn apply_mode_layout(
     img_h: usize,
     snapshot: &TelemetrySnapshot,
 ) -> Result<()> {
-    let _ = deck.set_brightness(cfg.brightness);
+    deck.set_brightness(cfg.brightness)?;
     let mut configured_keys = HashSet::new();
 
     for k in 0..total_keys {
@@ -321,50 +332,136 @@ fn build_snapshot<'a>(
     }
 }
 
-fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
-    let mut custom_config: Option<PathBuf> = None;
-    let mut max_frames: Option<u64> = None;
+fn launch_agent_plist_path() -> Result<PathBuf> {
+    let home = env::var("HOME").context("HOME environment variable not set")?;
+    Ok(PathBuf::from(home)
+        .join("Library")
+        .join("LaunchAgents")
+        .join(format!("{LAUNCH_AGENT_LABEL}.plist")))
+}
 
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--config" | "-c" => {
-                if let Some(p) = args.get(i + 1) {
-                    custom_config = Some(PathBuf::from(p));
-                    i += 1;
-                }
-            }
-            "--frames" => {
-                if let Some(n) = args.get(i + 1) {
-                    max_frames = n.parse().ok();
-                    i += 1;
-                }
-            }
-            _ => {}
-        }
-        i += 1;
+fn install_launch_agent() -> Result<()> {
+    let home = env::var("HOME").context("HOME environment variable not set")?;
+    let exe_path = env::current_exe().context("Failed to resolve current executable path")?;
+    let plist_path = launch_agent_plist_path()?;
+    let log_path = PathBuf::from(&home)
+        .join("Library")
+        .join("Logs")
+        .join("qdeck.log");
+    let work_dir = exe_path
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .unwrap_or_else(|| Path::new(&home));
+
+    if let Some(parent) = plist_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if let Some(log_parent) = log_path.parent() {
+        let _ = fs::create_dir_all(log_parent);
     }
 
-    let (mut cfg, cfg_path) = QDeckConfig::load(custom_config.as_deref())?;
-    let mut theme = cfg.theme.resolve();
-    let mut modes = cfg.effective_modes();
-    let mut mode_idx = modes
-        .iter()
-        .position(|m| m.eq_ignore_ascii_case(&cfg.default_mode))
-        .unwrap_or(0);
-    let mut last_mtime = file_mtime(&cfg_path);
+    let plist_content = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{exe}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{workdir}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>2</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>StandardOutPath</key>
+  <string>{log}</string>
+  <key>StandardErrorPath</key>
+  <string>{log}</string>
+</dict>
+</plist>
+"#,
+        label = LAUNCH_AGENT_LABEL,
+        exe = exe_path.display(),
+        workdir = work_dir.display(),
+        log = log_path.display()
+    );
 
-    println!("====================================================");
-    println!("  QDECK // TACTICAL OPS CENTER");
-    println!("  Config file: {}", cfg_path.display());
-    println!("  Refresh interval: {}ms", cfg.refresh_ms.max(250));
-    println!("  Modes: {:?} (default: '{}')", modes, modes[mode_idx]);
-    println!("  X-Plane UDP Endpoint: {}", cfg.xplane_addr);
-    println!("====================================================");
+    fs::write(&plist_path, plist_content)
+        .with_context(|| format!("Failed to write {}", plist_path.display()))?;
 
-    let mut xplane = XPlaneClient::new(&cfg.xplane_addr);
-    let mut deck = connect_deck(&cfg)?;
+    let _ = Command::new("launchctl")
+        .args(["unload", "-w"])
+        .arg(&plist_path)
+        .status();
+    let status = Command::new("launchctl")
+        .args(["load", "-w"])
+        .arg(&plist_path)
+        .status()
+        .context("Failed to execute launchctl load")?;
+
+    if !status.success() {
+        return Err(anyhow!(
+            "launchctl load exited with status {:?} for {}",
+            status.code(),
+            plist_path.display()
+        ));
+    }
+
+    println!(
+        "[QDECK] Installed & started macOS LaunchAgent: {}",
+        plist_path.display()
+    );
+    println!("[QDECK] Binary: {}", exe_path.display());
+    println!("[QDECK] Logs:   {}", log_path.display());
+    Ok(())
+}
+
+fn uninstall_launch_agent() -> Result<()> {
+    let plist_path = launch_agent_plist_path()?;
+    if plist_path.exists() {
+        let _ = Command::new("launchctl")
+            .args(["unload", "-w"])
+            .arg(&plist_path)
+            .status();
+        fs::remove_file(&plist_path)?;
+        println!(
+            "[QDECK] Removed macOS LaunchAgent: {}",
+            plist_path.display()
+        );
+    } else {
+        println!(
+            "[QDECK] LaunchAgent not installed at {}",
+            plist_path.display()
+        );
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_deck_session(
+    mut deck: StreamDeck,
+    cfg: &mut QDeckConfig,
+    cfg_path: &Path,
+    theme: &mut ResolvedTheme,
+    modes: &mut Vec<String>,
+    mode_idx: &mut usize,
+    last_mtime: &mut Option<SystemTime>,
+    xplane: &mut XPlaneClient,
+    sys: &mut System,
+    gpu_cores: &mut usize,
+    live_gpu_pct: &mut f32,
+    tick: &mut u64,
+    max_frames: Option<u64>,
+) -> Result<bool> {
     let kind = deck.kind();
     let total_keys = kind.keys();
     let cols = cols_for_kind(kind);
@@ -389,20 +486,8 @@ fn main() -> Result<()> {
         img_h
     );
 
-    let (mut gpu_cores, mut live_gpu_pct) = query_macos_gpu_stats(16);
-    println!("[QDECK] Detected GPU Cores: {}", gpu_cores);
-
     let _ = deck.set_blocking(true);
 
-    let mut sys = System::new_with_specifics(
-        RefreshKind::nothing()
-            .with_cpu(CpuRefreshKind::everything())
-            .with_memory(MemoryRefreshKind::everything()),
-    );
-    sys.refresh_cpu_usage();
-    sys.refresh_memory();
-
-    let mut tick: u64 = 0;
     let mut demo_until: Option<Instant> = None;
     let mut prev_buttons = vec![0u8; total_keys as usize];
     let mut highlight_until: Vec<Option<Instant>> = vec![None; total_keys as usize];
@@ -410,25 +495,25 @@ fn main() -> Result<()> {
 
     {
         let total_modes = modes.len().max(1);
-        let active_mode = &modes[mode_idx];
-        let next_mode = &modes[(mode_idx + 1) % total_modes];
+        let active_mode = &modes[*mode_idx];
+        let next_mode = &modes[(*mode_idx + 1) % total_modes];
         let initial_snapshot = build_snapshot(
-            &sys,
+            sys,
             &mut core_buf,
-            gpu_cores,
-            live_gpu_pct,
+            *gpu_cores,
+            *live_gpu_pct,
             active_mode,
             next_mode,
-            mode_idx,
+            *mode_idx,
             total_modes,
             &xplane.state,
-            tick,
+            *tick,
             false,
         );
         apply_mode_layout(
             &mut deck,
-            &cfg,
-            &theme,
+            cfg,
+            theme,
             cols,
             total_keys,
             img_w,
@@ -459,63 +544,77 @@ fn main() -> Result<()> {
         let mut mode_switched = false;
         let mut fcu_changed = false;
 
-        if let Ok(buttons) = deck.read_buttons(Some(wait_duration)) {
-            let press_time = Instant::now();
-            for (k_idx, (&prev, &curr)) in prev_buttons.iter().zip(buttons.iter()).enumerate() {
-                let key_u8 = k_idx as u8;
-                // Edge-trigger on key press (0 -> 1)
-                if prev == 0 && curr != 0 {
-                    highlight_until[k_idx] = Some(press_time + TAP_HIGHLIGHT_DURATION);
-                    newly_highlighted_keys.push(key_u8);
-                    let active_mode = &modes[mode_idx];
-                    if let Some(tile) = cfg.tile_for_key(key_u8, cols, total_keys, active_mode) {
-                        match tile.click_action() {
-                            ClickAction::CycleMode => {
-                                mode_idx = (mode_idx + 1) % modes.len().max(1);
-                                println!("[QDECK] Mode toggled -> '{}'", modes[mode_idx]);
-                                mode_switched = true;
-                            }
-                            ClickAction::XPlaneControl {
-                                control,
-                                custom_cmd,
-                            } => {
-                                println!(
-                                    "[QDECK] [X-Plane A320] Triggered FCU control '{}' -> UDP {}",
-                                    control, cfg.xplane_addr
-                                );
-                                xplane.trigger_a320_control(&control, custom_cmd.as_deref());
-                                fcu_changed = true;
-                            }
-                            ClickAction::OpenApp(app_name) => {
-                                println!(
-                                    "[QDECK] Click -> Opening macOS application: '{}'",
-                                    app_name
-                                );
-                                if let Err(e) =
-                                    Command::new("open").arg("-a").arg(&app_name).spawn()
-                                {
-                                    eprintln!("[QDECK] Failed to open app '{}': {}", app_name, e);
+        match deck.read_buttons(Some(wait_duration)) {
+            Ok(buttons) => {
+                let press_time = Instant::now();
+                for (k_idx, (&prev, &curr)) in prev_buttons.iter().zip(buttons.iter()).enumerate() {
+                    let key_u8 = k_idx as u8;
+                    // Edge-trigger on key press (0 -> 1)
+                    if prev == 0 && curr != 0 {
+                        highlight_until[k_idx] = Some(press_time + TAP_HIGHLIGHT_DURATION);
+                        newly_highlighted_keys.push(key_u8);
+                        let active_mode = &modes[*mode_idx];
+                        if let Some(tile) = cfg.tile_for_key(key_u8, cols, total_keys, active_mode)
+                        {
+                            match tile.click_action() {
+                                ClickAction::CycleMode => {
+                                    *mode_idx = (*mode_idx + 1) % modes.len().max(1);
+                                    println!("[QDECK] Mode toggled -> '{}'", modes[*mode_idx]);
+                                    mode_switched = true;
                                 }
-                            }
-                            ClickAction::ShellCommand(cmd) => {
-                                println!("[QDECK] Click -> Executing command: '{}'", cmd);
-                                if let Err(e) = Command::new("/bin/sh").arg("-c").arg(&cmd).spawn()
-                                {
-                                    eprintln!("[QDECK] Failed to run command '{}': {}", cmd, e);
+                                ClickAction::XPlaneControl {
+                                    control,
+                                    custom_cmd,
+                                } => {
+                                    println!(
+                                        "[QDECK] [X-Plane A320] Triggered FCU control '{}' -> UDP {}",
+                                        control, cfg.xplane_addr
+                                    );
+                                    xplane.trigger_a320_control(&control, custom_cmd.as_deref());
+                                    fcu_changed = true;
                                 }
+                                ClickAction::OpenApp(app_name) => {
+                                    println!(
+                                        "[QDECK] Click -> Opening macOS application: '{}'",
+                                        app_name
+                                    );
+                                    if let Err(e) =
+                                        Command::new("open").arg("-a").arg(&app_name).spawn()
+                                    {
+                                        eprintln!(
+                                            "[QDECK] Failed to open app '{}': {}",
+                                            app_name, e
+                                        );
+                                    }
+                                }
+                                ClickAction::ShellCommand(cmd) => {
+                                    println!("[QDECK] Click -> Executing command: '{}'", cmd);
+                                    if let Err(e) =
+                                        Command::new("/bin/sh").arg("-c").arg(&cmd).spawn()
+                                    {
+                                        eprintln!(
+                                            "[QDECK] Failed to run command '{}': {}",
+                                            cmd, e
+                                        );
+                                    }
+                                }
+                                ClickAction::TriggerDemoSpike => {
+                                    println!(
+                                        "[QDECK] Click -> Triggering 4s simulated Amber/Red load spike demo!"
+                                    );
+                                    demo_until = Some(Instant::now() + Duration::from_secs(4));
+                                }
+                                ClickAction::None => {}
                             }
-                            ClickAction::TriggerDemoSpike => {
-                                println!(
-                                    "[QDECK] Click -> Triggering 4s simulated Amber/Red load spike demo!"
-                                );
-                                demo_until = Some(Instant::now() + Duration::from_secs(4));
-                            }
-                            ClickAction::None => {}
                         }
                     }
                 }
+                prev_buttons = buttons;
             }
-            prev_buttons = buttons;
+            Err(streamdeck::Error::NoData) => {}
+            Err(e) => {
+                return Err(anyhow!("Stream Deck USB read error: {e}"));
+            }
         }
 
         // Expire any finished 120ms tap flashes
@@ -537,29 +636,26 @@ fn main() -> Result<()> {
 
         if mode_switched {
             let total_modes = modes.len().max(1);
-            let active_mode = &modes[mode_idx];
-            let next_mode = &modes[(mode_idx + 1) % total_modes];
+            let active_mode = &modes[*mode_idx];
+            let next_mode = &modes[(*mode_idx + 1) % total_modes];
             let snapshot = build_snapshot(
-                &sys,
+                sys,
                 &mut core_buf,
-                gpu_cores,
-                live_gpu_pct,
+                *gpu_cores,
+                *live_gpu_pct,
                 active_mode,
                 next_mode,
-                mode_idx,
+                *mode_idx,
                 total_modes,
                 &xplane.state,
-                tick,
+                *tick,
                 in_demo,
             );
-            let _ = apply_mode_layout(
-                &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, &snapshot,
-            );
+            apply_mode_layout(&mut deck, cfg, theme, cols, total_keys, img_w, img_h, &snapshot)?;
             for &key_u8 in &newly_highlighted_keys {
-                let _ = render_key_to_deck(
-                    &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, key_u8, &snapshot,
-                    true,
-                );
+                render_key_to_deck(
+                    &mut deck, cfg, theme, cols, total_keys, img_w, img_h, key_u8, &snapshot, true,
+                )?;
             }
             last_render = Instant::now();
             continue;
@@ -567,25 +663,23 @@ fn main() -> Result<()> {
 
         if fcu_changed || !newly_highlighted_keys.is_empty() || !expired_highlight_keys.is_empty() {
             let total_modes = modes.len().max(1);
-            let active_mode = &modes[mode_idx];
-            let next_mode = &modes[(mode_idx + 1) % total_modes];
+            let active_mode = &modes[*mode_idx];
+            let next_mode = &modes[(*mode_idx + 1) % total_modes];
             let snapshot = build_snapshot(
-                &sys,
+                sys,
                 &mut core_buf,
-                gpu_cores,
-                live_gpu_pct,
+                *gpu_cores,
+                *live_gpu_pct,
                 active_mode,
                 next_mode,
-                mode_idx,
+                *mode_idx,
                 total_modes,
                 &xplane.state,
-                tick,
+                *tick,
                 in_demo,
             );
 
             if fcu_changed {
-                // Re-render all FCU tiles in the current mode so linked annunciators
-                // (e.g. AP disconnect -> MASTER WARN red, A/THR disconnect -> MASTER CAUT amber) update immediately
                 for k in 0..total_keys {
                     if let Some(t) = cfg.tile_for_key(k, cols, total_keys, active_mode) {
                         if t.is_a320_fcu() {
@@ -593,69 +687,69 @@ fn main() -> Result<()> {
                                 .get(k as usize)
                                 .and_then(|&d| d)
                                 .is_some_and(|deadline| Instant::now() < deadline);
-                            let _ = render_key_to_deck(
-                                &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, k,
+                            render_key_to_deck(
+                                &mut deck, cfg, theme, cols, total_keys, img_w, img_h, k,
                                 &snapshot, is_hi,
-                            );
+                            )?;
                         }
                     }
                 }
             } else {
                 for key_u8 in newly_highlighted_keys {
-                    let _ = render_key_to_deck(
-                        &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, key_u8,
-                        &snapshot, true,
-                    );
+                    render_key_to_deck(
+                        &mut deck, cfg, theme, cols, total_keys, img_w, img_h, key_u8, &snapshot,
+                        true,
+                    )?;
                 }
             }
 
             for key_u8 in expired_highlight_keys {
-                let _ = render_key_to_deck(
-                    &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, key_u8, &snapshot,
+                render_key_to_deck(
+                    &mut deck, cfg, theme, cols, total_keys, img_w, img_h, key_u8, &snapshot,
                     false,
-                );
+                )?;
             }
         }
 
         // Once-per-second telemetry & config check
         if last_render.elapsed() >= refresh_interval {
-            let current_mtime = file_mtime(&cfg_path);
-            if current_mtime != last_mtime && current_mtime.is_some() {
-                last_mtime = current_mtime;
-                match QDeckConfig::load_from_file(&cfg_path) {
+            let current_mtime = file_mtime(cfg_path);
+            if current_mtime != *last_mtime && current_mtime.is_some() {
+                *last_mtime = current_mtime;
+                match QDeckConfig::load_from_file(cfg_path) {
                     Ok(new_cfg) => {
                         println!(
                             "[QDECK] Hot-reloaded configuration from {}",
                             cfg_path.display()
                         );
-                        let prev_mode_name = modes.get(mode_idx).cloned().unwrap_or_default();
-                        cfg = new_cfg;
+                        let prev_mode_name = modes.get(*mode_idx).cloned().unwrap_or_default();
+                        *cfg = new_cfg;
                         xplane.set_target_addr(&cfg.xplane_addr);
-                        theme = cfg.theme.resolve();
-                        modes = cfg.effective_modes();
-                        mode_idx = modes
+                        *theme = cfg.theme.resolve();
+                        *modes = cfg.effective_modes();
+                        *mode_idx = modes
                             .iter()
                             .position(|m| m == &prev_mode_name)
                             .unwrap_or(0);
                         let total_modes = modes.len().max(1);
-                        let active_mode = &modes[mode_idx];
-                        let next_mode = &modes[(mode_idx + 1) % total_modes];
+                        let active_mode = &modes[*mode_idx];
+                        let next_mode = &modes[(*mode_idx + 1) % total_modes];
                         let snapshot = build_snapshot(
-                            &sys,
+                            sys,
                             &mut core_buf,
-                            gpu_cores,
-                            live_gpu_pct,
+                            *gpu_cores,
+                            *live_gpu_pct,
                             active_mode,
                             next_mode,
-                            mode_idx,
+                            *mode_idx,
                             total_modes,
                             &xplane.state,
-                            tick,
+                            *tick,
                             in_demo,
                         );
-                        let _ = apply_mode_layout(
-                            &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, &snapshot,
-                        );
+                        apply_mode_layout(
+                            &mut deck, cfg, theme, cols, total_keys, img_w, img_h, &snapshot,
+                        )?;
                     }
                     Err(e) => {
                         eprintln!("[QDECK] Config reload error: {}", e);
@@ -664,8 +758,8 @@ fn main() -> Result<()> {
             }
 
             let total_modes = modes.len().max(1);
-            let active_mode = &modes[mode_idx];
-            let next_mode = &modes[(mode_idx + 1) % total_modes];
+            let active_mode = &modes[*mode_idx];
+            let next_mode = &modes[(*mode_idx + 1) % total_modes];
 
             let mut needs_cpu = false;
             let mut needs_gpu = false;
@@ -694,9 +788,9 @@ fn main() -> Result<()> {
                 sys.refresh_memory();
             }
             if needs_gpu && !in_demo {
-                let (detected_cores, gpu_util) = query_macos_gpu_stats(gpu_cores);
-                gpu_cores = detected_cores;
-                live_gpu_pct = gpu_util;
+                let (detected_cores, gpu_util) = query_macos_gpu_stats(*gpu_cores);
+                *gpu_cores = detected_cores;
+                *live_gpu_pct = gpu_util;
             }
             if needs_xplane {
                 xplane.ensure_subscribed();
@@ -704,16 +798,16 @@ fn main() -> Result<()> {
             }
 
             let snapshot = build_snapshot(
-                &sys,
+                sys,
                 &mut core_buf,
-                gpu_cores,
-                live_gpu_pct,
+                *gpu_cores,
+                *live_gpu_pct,
                 active_mode,
                 next_mode,
-                mode_idx,
+                *mode_idx,
                 total_modes,
                 &xplane.state,
-                tick,
+                *tick,
                 in_demo,
             );
 
@@ -725,7 +819,7 @@ fn main() -> Result<()> {
                             .and_then(|&d| d)
                             .is_some_and(|deadline| Instant::now() < deadline);
                         render_key_to_deck(
-                            &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, k, &snapshot,
+                            &mut deck, cfg, theme, cols, total_keys, img_w, img_h, k, &snapshot,
                             is_hi,
                         )?;
                     }
@@ -733,11 +827,114 @@ fn main() -> Result<()> {
             }
 
             last_render = Instant::now();
-            tick += 1;
+            *tick += 1;
             if let Some(max) = max_frames {
-                if tick >= max {
-                    break;
+                if *tick >= max {
+                    return Ok(true);
                 }
+            }
+        }
+    }
+}
+
+fn main() -> Result<()> {
+    let args: Vec<String> = env::args().collect();
+    let mut custom_config: Option<PathBuf> = None;
+    let mut max_frames: Option<u64> = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--install-service" => {
+                return install_launch_agent();
+            }
+            "--uninstall-service" => {
+                return uninstall_launch_agent();
+            }
+            "--config" | "-c" => {
+                if let Some(p) = args.get(i + 1) {
+                    custom_config = Some(PathBuf::from(p));
+                    i += 1;
+                }
+            }
+            "--frames" => {
+                if let Some(n) = args.get(i + 1) {
+                    max_frames = n.parse().ok();
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let (mut cfg, cfg_path) = QDeckConfig::load(custom_config.as_deref())?;
+    let mut theme = cfg.theme.resolve();
+    let mut modes = cfg.effective_modes();
+    let mut mode_idx = modes
+        .iter()
+        .position(|m| m.eq_ignore_ascii_case(&cfg.default_mode))
+        .unwrap_or(0);
+    let mut last_mtime = file_mtime(&cfg_path);
+
+    println!("====================================================");
+    println!("  QDECK // TACTICAL OPS CENTER (RELEASE SERVICE)");
+    println!("  Config file: {}", cfg_path.display());
+    println!("  Refresh interval: {}ms", cfg.refresh_ms.max(250));
+    println!("  Modes: {:?} (default: '{}')", modes, modes[mode_idx]);
+    println!("  X-Plane UDP Endpoint: {}", cfg.xplane_addr);
+    println!("====================================================");
+
+    let mut xplane = XPlaneClient::new(&cfg.xplane_addr);
+    let (mut gpu_cores, mut live_gpu_pct) = query_macos_gpu_stats(16);
+    println!("[QDECK] Detected GPU Cores: {}", gpu_cores);
+
+    let mut sys = System::new_with_specifics(
+        RefreshKind::nothing()
+            .with_cpu(CpuRefreshKind::everything())
+            .with_memory(MemoryRefreshKind::everything()),
+    );
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
+
+    let mut tick: u64 = 0;
+    let mut logged_waiting = false;
+
+    loop {
+        match connect_deck(&cfg) {
+            Ok(deck) => {
+                logged_waiting = false;
+                match run_deck_session(
+                    deck,
+                    &mut cfg,
+                    &cfg_path,
+                    &mut theme,
+                    &mut modes,
+                    &mut mode_idx,
+                    &mut last_mtime,
+                    &mut xplane,
+                    &mut sys,
+                    &mut gpu_cores,
+                    &mut live_gpu_pct,
+                    &mut tick,
+                    max_frames,
+                ) {
+                    Ok(true) => break,
+                    Ok(false) => {}
+                    Err(e) => {
+                        eprintln!(
+                            "[QDECK] Stream Deck disconnected ({e}). Reconnecting in 2s..."
+                        );
+                        thread::sleep(Duration::from_secs(2));
+                    }
+                }
+            }
+            Err(e) => {
+                if !logged_waiting {
+                    eprintln!("[QDECK] {e} — retrying every 3s...");
+                    logged_waiting = true;
+                }
+                thread::sleep(Duration::from_secs(3));
             }
         }
     }
