@@ -1,4 +1,6 @@
-use std::net::UdpSocket;
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -11,7 +13,6 @@ pub struct A320FcuState {
     pub exped_on: bool,
     pub appr_on: bool,
     pub trk_fpa_mode: bool,
-    pub mach_mode: bool,
     pub master_warn: bool,
     pub master_caut: bool,
     pub hdg_managed: bool,
@@ -35,7 +36,6 @@ impl Default for A320FcuState {
             exped_on: false,
             appr_on: false,
             trk_fpa_mode: false,
-            mach_mode: false,
             master_warn: false,
             master_caut: false,
             hdg_managed: true,
@@ -62,18 +62,48 @@ const DREF_SIM_SPD: i32 = 9;
 const DREF_SIM_VS: i32 = 10;
 const DREF_SIM_WARN: i32 = 11;
 const DREF_SIM_CAUT: i32 = 12;
+const DREF_SIM_TRK: i32 = 13;
 const DREF_TOLISS_AP1: i32 = 20;
 const DREF_TOLISS_AP2: i32 = 21;
 const DREF_TOLISS_ATHR: i32 = 22;
 const DREF_TOLISS_LOC: i32 = 23;
 const DREF_TOLISS_APPR: i32 = 24;
 const DREF_TOLISS_EXPED: i32 = 25;
+const DREF_A333_HDG_OPEN: i32 = 30;
+
+const WEB_API_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 8086);
+
+fn extract_json_u64_id(json: &str) -> Option<u64> {
+    let idx = json.find("\"id\":")?;
+    let after = &json[idx + 5..];
+    let digits: String = after
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<u64>().ok()
+}
+
+fn extract_json_f32_data(json: &str) -> Option<f32> {
+    let idx = json.find("\"data\":")?;
+    let after = &json[idx + 7..];
+    let num_str: String = after
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+' || *c == 'e' || *c == 'E')
+        .collect();
+    num_str.parse::<f32>().ok()
+}
 
 pub struct XPlaneClient {
     socket: Option<UdpSocket>,
     target_addr: String,
     subscribed: bool,
     last_sub_attempt: Instant,
+    cmd_id_cache: HashMap<String, Option<u64>>,
+    dref_id_cache: HashMap<String, Option<u64>>,
+    prev_dref_vals: HashMap<i32, f32>,
+    web_api_backoff_until: Option<Instant>,
     pub state: A320FcuState,
 }
 
@@ -88,6 +118,10 @@ impl XPlaneClient {
             target_addr: target_addr.to_string(),
             subscribed: false,
             last_sub_attempt: Instant::now() - Duration::from_secs(60),
+            cmd_id_cache: HashMap::new(),
+            dref_id_cache: HashMap::new(),
+            prev_dref_vals: HashMap::new(),
+            web_api_backoff_until: None,
             state: A320FcuState::default(),
         }
     }
@@ -99,31 +133,91 @@ impl XPlaneClient {
         }
     }
 
-    /// Sends an X-Plane `CMND\0<path>\0` UDP datagram to X-Plane (port 49000).
-    pub fn send_command(&self, cmd_path: &str) {
-        let Some(ref sock) = self.socket else {
-            return;
+    /// Performs a fast loopback HTTP request to X-Plane 12's Local WebAPI (`127.0.0.1:8086`).
+    fn web_api_request(&mut self, method: &str, path: &str, body: Option<&str>) -> Option<String> {
+        if let Some(until) = self.web_api_backoff_until {
+            if Instant::now() < until {
+                return None;
+            }
+        }
+
+        let addr = SocketAddr::from(WEB_API_ADDR);
+        let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(35)) else {
+            self.web_api_backoff_until = Some(Instant::now() + Duration::from_secs(3));
+            return None;
         };
-        let mut pkt = Vec::with_capacity(6 + cmd_path.len());
-        pkt.extend_from_slice(b"CMND\0");
-        pkt.extend_from_slice(cmd_path.as_bytes());
-        pkt.push(0);
-        let _ = sock.send_to(&pkt, &self.target_addr);
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(60)));
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(35)));
+
+        let req = if let Some(b) = body {
+            format!(
+                "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:8086\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}",
+                b.len()
+            )
+        } else {
+            format!(
+                "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:8086\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+            )
+        };
+
+        if stream.write_all(req.as_bytes()).is_err() {
+            return None;
+        }
+
+        let mut resp = String::new();
+        if stream.read_to_string(&mut resp).is_err() {
+            return None;
+        }
+
+        let (headers, json_body) = resp.split_once("\r\n\r\n")?;
+        if !headers.starts_with("HTTP/1.1 200") {
+            return None;
+        }
+        Some(json_body.to_string())
     }
 
-    /// Sends an X-Plane `DREF\0<f32><path[500]>` UDP datagram to set a dataref directly.
-    #[allow(dead_code)]
-    pub fn send_dataref(&self, dref_path: &str, value: f32) {
-        let Some(ref sock) = self.socket else {
-            return;
-        };
-        let mut pkt = vec![0u8; 509];
-        pkt[0..5].copy_from_slice(b"DREF\0");
-        pkt[5..9].copy_from_slice(&value.to_le_bytes());
-        let bytes = dref_path.as_bytes();
-        let copy_len = bytes.len().min(499);
-        pkt[9..(9 + copy_len)].copy_from_slice(&bytes[..copy_len]);
-        let _ = sock.send_to(&pkt, &self.target_addr);
+    fn resolve_web_cmd_id(&mut self, cmd_path: &str) -> Option<u64> {
+        if let Some(&cached) = self.cmd_id_cache.get(cmd_path) {
+            return cached;
+        }
+        let path = format!("/api/v2/commands?filter[name]={cmd_path}");
+        let body = self.web_api_request("GET", &path, None)?;
+        let id = extract_json_u64_id(&body);
+        self.cmd_id_cache.insert(cmd_path.to_string(), id);
+        id
+    }
+
+    fn resolve_web_dref_id(&mut self, dref_path: &str) -> Option<u64> {
+        if let Some(&cached) = self.dref_id_cache.get(dref_path) {
+            return cached;
+        }
+        let path = format!("/api/v2/datarefs?filter[name]={dref_path}");
+        let body = self.web_api_request("GET", &path, None)?;
+        let id = extract_json_u64_id(&body);
+        self.dref_id_cache.insert(dref_path.to_string(), id);
+        id
+    }
+
+    /// Sends a command to X-Plane via BOTH X-Plane 12's Local WebAPI (`127.0.0.1:8086`)
+    /// AND legacy UDP (`127.0.0.1:49000` `CMND\0`).
+    pub fn send_command(&mut self, cmd_path: &str) {
+        if let Some(ref sock) = self.socket {
+            let mut pkt = Vec::with_capacity(6 + cmd_path.len());
+            pkt.extend_from_slice(b"CMND\0");
+            pkt.extend_from_slice(cmd_path.as_bytes());
+            pkt.push(0);
+            let _ = sock.send_to(&pkt, &self.target_addr);
+        }
+
+        if let Some(id) = self.resolve_web_cmd_id(cmd_path) {
+            let path = format!("/api/v2/command/{id}/activate");
+            if self
+                .web_api_request("POST", &path, Some("{\"duration\":0}"))
+                .is_some()
+            {
+                self.state.last_rx = Some(Instant::now());
+            }
+        }
     }
 
     /// Requests X-Plane to stream a dataref at `freq_hz` Hz via `RREF\0`.
@@ -182,57 +276,118 @@ impl XPlaneClient {
         }
     }
 
-    /// Drains any incoming `RREF` UDP packets from X-Plane and updates `self.state`.
+    /// Drains any incoming `RREF` UDP packets OR polls X-Plane 12's Local WebAPI (`127.0.0.1:8086`)
+    /// and updates `self.state`.
     pub fn poll_incoming(&mut self) {
-        let Some(ref sock) = self.socket else {
-            return;
-        };
-        let mut buf = [0u8; 2048];
-        while let Ok((len, _addr)) = sock.recv_from(&mut buf) {
-            if len >= 13 && &buf[0..4] == b"RREF" {
-                self.state.last_rx = Some(Instant::now());
-                let mut offset = 5;
-                while offset + 8 <= len {
-                    let id = i32::from_le_bytes([
-                        buf[offset],
-                        buf[offset + 1],
-                        buf[offset + 2],
-                        buf[offset + 3],
-                    ]);
-                    let val = f32::from_le_bytes([
-                        buf[offset + 4],
-                        buf[offset + 5],
-                        buf[offset + 6],
-                        buf[offset + 7],
-                    ]);
-                    Self::apply_dref_update(&mut self.state, id, val);
-                    offset += 8;
+        let mut got_udp = false;
+        if let Some(ref sock) = self.socket {
+            let mut buf = [0u8; 2048];
+            while let Ok((len, _addr)) = sock.recv_from(&mut buf) {
+                if len >= 13 && &buf[0..4] == b"RREF" {
+                    got_udp = true;
+                    self.state.last_rx = Some(Instant::now());
+                    let mut offset = 5;
+                    while offset + 8 <= len {
+                        let id = i32::from_le_bytes([
+                            buf[offset],
+                            buf[offset + 1],
+                            buf[offset + 2],
+                            buf[offset + 3],
+                        ]);
+                        let val = f32::from_le_bytes([
+                            buf[offset + 4],
+                            buf[offset + 5],
+                            buf[offset + 6],
+                            buf[offset + 7],
+                        ]);
+                        Self::apply_dref_update(
+                            &mut self.state,
+                            &mut self.prev_dref_vals,
+                            id,
+                            val,
+                        );
+                        offset += 8;
+                    }
+                }
+            }
+        }
+
+        if !got_udp {
+            let web_drefs = [
+                (DREF_SIM_FD, "sim/cockpit2/autopilot/flight_director_mode"),
+                (DREF_SIM_AP1, "sim/cockpit2/autopilot/servos_on"),
+                (DREF_SIM_AP2, "sim/cockpit2/autopilot/servos2_on"),
+                (DREF_SIM_ATHR, "sim/cockpit2/autopilot/autothrottle_on"),
+                (DREF_SIM_LOC, "sim/cockpit2/autopilot/nav_status"),
+                (DREF_SIM_APPR, "sim/cockpit2/autopilot/approach_status"),
+                (
+                    DREF_SIM_HDG,
+                    "sim/cockpit2/autopilot/heading_dial_deg_mag_pilot",
+                ),
+                (DREF_SIM_ALT, "sim/cockpit2/autopilot/altitude_dial_ft"),
+                (DREF_SIM_SPD, "sim/cockpit2/autopilot/airspeed_dial_kts_mach"),
+                (DREF_SIM_VS, "sim/cockpit2/autopilot/vvi_dial_fpm"),
+                (DREF_SIM_TRK, "sim/cockpit2/autopilot/trk_fpa"),
+                (DREF_SIM_WARN, "sim/cockpit2/annunciators/master_warning"),
+                (DREF_SIM_CAUT, "sim/cockpit2/annunciators/master_caution"),
+                (DREF_A333_HDG_OPEN, "laminar/A333/autopilot/hdg_window_open"),
+            ];
+
+            for (key_id, dref_name) in web_drefs {
+                let Some(web_id) = self.resolve_web_dref_id(dref_name) else {
+                    if self.web_api_backoff_until.is_some_and(|u| Instant::now() < u) {
+                        break;
+                    }
+                    continue;
+                };
+                let path = format!("/api/v2/datarefs/{web_id}/value");
+                if let Some(body) = self.web_api_request("GET", &path, None) {
+                    if let Some(val) = extract_json_f32_data(&body) {
+                        self.state.last_rx = Some(Instant::now());
+                        Self::apply_dref_update(
+                            &mut self.state,
+                            &mut self.prev_dref_vals,
+                            key_id,
+                            val,
+                        );
+                    }
                 }
             }
         }
     }
 
-    fn apply_dref_update(state: &mut A320FcuState, id: i32, val: f32) {
+    fn apply_dref_update(
+        state: &mut A320FcuState,
+        prev_vals: &mut HashMap<i32, f32>,
+        id: i32,
+        val: f32,
+    ) {
+        let changed = prev_vals
+            .insert(id, val)
+            .is_none_or(|old| (old - val).abs() > 0.001);
+
         match id {
-            DREF_SIM_FD => state.fd_on = val >= 1.0,
-            DREF_SIM_AP1 | DREF_TOLISS_AP1 => state.ap1_on = val > 0.5,
-            DREF_SIM_AP2 | DREF_TOLISS_AP2 => state.ap2_on = val > 0.5,
-            DREF_SIM_ATHR | DREF_TOLISS_ATHR => state.athr_on = val > 0.5,
-            DREF_SIM_LOC | DREF_TOLISS_LOC => state.loc_on = val >= 1.0,
-            DREF_SIM_APPR | DREF_TOLISS_APPR => state.appr_on = val >= 1.0,
-            DREF_TOLISS_EXPED => state.exped_on = val > 0.5,
+            DREF_SIM_FD if changed => state.fd_on = val >= 1.0,
+            DREF_SIM_AP1 | DREF_TOLISS_AP1 if changed => state.ap1_on = val > 0.5,
+            DREF_SIM_AP2 | DREF_TOLISS_AP2 if changed => state.ap2_on = val > 0.5,
+            DREF_SIM_ATHR | DREF_TOLISS_ATHR if changed => state.athr_on = val > 0.5,
+            DREF_SIM_LOC | DREF_TOLISS_LOC if changed => state.loc_on = val >= 1.0,
+            DREF_SIM_APPR | DREF_TOLISS_APPR if changed => state.appr_on = val >= 1.0,
+            DREF_TOLISS_EXPED if changed => state.exped_on = val > 0.5,
+            DREF_SIM_TRK if changed => state.trk_fpa_mode = val > 0.5,
+            DREF_A333_HDG_OPEN if changed => state.hdg_managed = val < 0.5,
             DREF_SIM_HDG => state.hdg_deg = val.rem_euclid(360.0),
             DREF_SIM_ALT => state.alt_ft = val,
             DREF_SIM_SPD => state.spd_kts = val,
             DREF_SIM_VS => state.vs_fpm = val,
-            DREF_SIM_WARN => state.master_warn = val > 0.5,
-            DREF_SIM_CAUT => state.master_caut = val > 0.5,
+            DREF_SIM_WARN if changed => state.master_warn = val > 0.5,
+            DREF_SIM_CAUT if changed => state.master_caut = val > 0.5,
             _ => {}
         }
     }
 
-    /// Executes an Airbus A320 FCU control press: sends both standard X-Plane and AirbusFBW/ToLiss
-    /// UDP commands to X-Plane AND updates optimistic FCU state for immediate cockpit feedback.
+    /// Executes an Airbus A320/A330 FCU control press: sends standard X-Plane, Laminar Airbus,
+    /// and AirbusFBW/ToLiss commands via WebAPI (`127.0.0.1:8086`) + UDP (`127.0.0.1:49000`).
     pub fn trigger_a320_control(&mut self, control_name: &str, custom_cmd: Option<&str>) {
         if let Some(cmd) = custom_cmd {
             if !cmd.trim().is_empty() {
@@ -254,7 +409,6 @@ impl XPlaneClient {
                 let was_on = self.state.ap1_on;
                 self.state.ap1_on = !was_on;
                 if was_on && !self.state.ap2_on {
-                    // Disconnecting AP triggers Master Warning (Red) just like a real A320!
                     self.state.master_warn = true;
                 }
             }
@@ -269,13 +423,13 @@ impl XPlaneClient {
                 }
             }
             "athr" | "a/thr" | "autothrottle" => {
+                self.send_command("laminar/A333/autopilot/a_thr_toggle");
                 self.send_command("sim/autopilot/autothrottle_toggle");
                 self.send_command("toliss_airbus/athr_push");
                 self.send_command("AirbusFBW/ATHRbutton");
                 let was_on = self.state.athr_on;
                 self.state.athr_on = !was_on;
                 if was_on {
-                    // Disconnecting A/THR triggers Master Caution (Amber) like a real A320!
                     self.state.master_caut = true;
                 }
             }
@@ -307,18 +461,37 @@ impl XPlaneClient {
                 self.state.exped_on = !self.state.exped_on;
             }
             "hdg" | "heading" => {
-                self.send_command("sim/autopilot/heading");
-                self.send_command("AirbusFBW/PullHDGSel");
+                if self.state.hdg_managed {
+                    self.send_command("laminar/A333/autopilot/heading_knob_pull");
+                    self.send_command("sim/autopilot/heading");
+                    self.send_command("AirbusFBW/PullHDGSel");
+                } else {
+                    self.send_command("laminar/A333/autopilot/heading_knob_push");
+                    self.send_command("sim/autopilot/NAV");
+                    self.send_command("AirbusFBW/PushHDGSel");
+                }
                 self.state.hdg_managed = !self.state.hdg_managed;
             }
             "alt" | "altitude" => {
-                self.send_command("sim/autopilot/altitude_hold");
-                self.send_command("AirbusFBW/PullAltitude");
+                if self.state.alt_managed {
+                    self.send_command("laminar/A333/autopilot/altitude_knob_pull");
+                    self.send_command("sim/autopilot/altitude_hold");
+                    self.send_command("AirbusFBW/PullAltitude");
+                } else {
+                    self.send_command("laminar/A333/autopilot/altitude_knob_push");
+                    self.send_command("AirbusFBW/PushAltitude");
+                }
                 self.state.alt_managed = !self.state.alt_managed;
             }
             "spd" | "speed" | "spd_mach" => {
-                self.send_command("sim/autopilot/airspeed_sync");
-                self.send_command("AirbusFBW/SPDabovemach");
+                if self.state.spd_managed {
+                    self.send_command("laminar/A333/autopilot/speed_knob_pull");
+                    self.send_command("sim/autopilot/airspeed_sync");
+                    self.send_command("AirbusFBW/PullSPDSel");
+                } else {
+                    self.send_command("laminar/A333/autopilot/speed_knob_push");
+                    self.send_command("AirbusFBW/PushSPDSel");
+                }
                 self.state.spd_managed = !self.state.spd_managed;
             }
             "trk" | "hdg_trk" | "trkfpa" | "bird" => {
@@ -327,6 +500,7 @@ impl XPlaneClient {
                 self.state.trk_fpa_mode = !self.state.trk_fpa_mode;
             }
             "vs" | "vs_zero" | "lvl_ch" => {
+                self.send_command("laminar/A333/autopilot/vertical_knob_push");
                 self.send_command("sim/autopilot/vertical_speed");
                 self.send_command("AirbusFBW/PushVSSel");
                 self.state.vs_fpm = 0.0;
@@ -335,12 +509,12 @@ impl XPlaneClient {
             "master_warn" | "warn" => {
                 self.send_command("sim/annunciator/clear_master_warning");
                 self.send_command("AirbusFBW/CaptWarnPush");
-                self.state.master_warn = !self.state.master_warn;
+                self.state.master_warn = false;
             }
             "master_caut" | "caut" | "caution" => {
                 self.send_command("sim/annunciator/clear_master_caution");
                 self.send_command("AirbusFBW/CaptCautPush");
-                self.state.master_caut = !self.state.master_caut;
+                self.state.master_caut = false;
             }
             other => {
                 if custom_cmd.is_none() && !other.is_empty() {
