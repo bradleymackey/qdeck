@@ -16,7 +16,8 @@ vid = 0x0fd9
 # pid = 0x0080          # Stream Deck MK.2 (auto-detected if omitted)
 background_mode = "grid" # "grid" (tactical standby reticle) or "blank" (pure black)
 default_mode = "dashboard"
-modes = ["dashboard", "gaming"]
+modes = ["dashboard", "xplane"]
+xplane_addr = "127.0.0.1:49000"
 
 [theme]
 background = "#000000"
@@ -30,22 +31,16 @@ warn_threshold = 60.0
 crit_threshold = 85.0
 
 # -----------------------------------------------------------------------------
-# Tile Definitions
-# - `type`: "mode", "cpu", "gpu", "memory", "ops_status", or "launcher"
-# - `mode`: mode name (e.g. "dashboard", "gaming", or "*" for all modes)
-# - `position`: "top-left", "top-center", "top-right",
-#               "middle-left", "center", "middle-right",
-#               "bottom-left", "bottom-center", "bottom-right",
-#               or "row,col" (e.g. "0,3"), or use `row = 0, col = 3` or `key = 3`
-# - `app`: macOS application to open when clicked (e.g. "Activity Monitor")
-# - `on_click`: shell command to execute when clicked
+# Global Mode Selector (Top-Left across all modes)
 # -----------------------------------------------------------------------------
-
 [[tiles]]
 type = "mode"
 position = "top-left"
 mode = "*"
 
+# -----------------------------------------------------------------------------
+# Mode: "dashboard" (System Telemetry)
+# -----------------------------------------------------------------------------
 [[tiles]]
 type = "gpu"
 position = "0,3"
@@ -63,6 +58,109 @@ label = "CPU"
 app = "Activity Monitor"
 warn_threshold = 60.0
 crit_threshold = 85.0
+
+# -----------------------------------------------------------------------------
+# Mode: "xplane" (Airbus A320 FCU Autopilot & Glare-Shield Controls)
+# Communicates directly with X-Plane via built-in UDP on 127.0.0.1:49000
+# -----------------------------------------------------------------------------
+# Row 0 (Top Row): Mode | FD 1 | AP 1 | AP 2 | A/THR
+[[tiles]]
+type = "a320_fcu"
+control = "fd"
+position = "0,1"
+mode = "xplane"
+label = "FD 1"
+
+[[tiles]]
+type = "a320_fcu"
+control = "ap1"
+position = "0,2"
+mode = "xplane"
+label = "AP 1"
+
+[[tiles]]
+type = "a320_fcu"
+control = "ap2"
+position = "0,3"
+mode = "xplane"
+label = "AP 2"
+
+[[tiles]]
+type = "a320_fcu"
+control = "athr"
+position = "0,4"
+mode = "xplane"
+label = "A/THR"
+
+# Row 1 (Middle Row): LOC | HDG | ALT | EXPED | APPR
+[[tiles]]
+type = "a320_fcu"
+control = "loc"
+position = "1,0"
+mode = "xplane"
+label = "LOC"
+
+[[tiles]]
+type = "a320_fcu"
+control = "hdg"
+position = "1,1"
+mode = "xplane"
+label = "HDG"
+
+[[tiles]]
+type = "a320_fcu"
+control = "alt"
+position = "1,2"
+mode = "xplane"
+label = "ALT"
+
+[[tiles]]
+type = "a320_fcu"
+control = "exped"
+position = "1,3"
+mode = "xplane"
+label = "EXPED"
+
+[[tiles]]
+type = "a320_fcu"
+control = "appr"
+position = "1,4"
+mode = "xplane"
+label = "APPR"
+
+# Row 2 (Bottom Row): MASTER WARN | MASTER CAUT | SPD | HDG/TRK | V/S 0
+[[tiles]]
+type = "a320_fcu"
+control = "master_warn"
+position = "2,0"
+mode = "xplane"
+
+[[tiles]]
+type = "a320_fcu"
+control = "master_caut"
+position = "2,1"
+mode = "xplane"
+
+[[tiles]]
+type = "a320_fcu"
+control = "spd"
+position = "2,2"
+mode = "xplane"
+label = "SPD"
+
+[[tiles]]
+type = "a320_fcu"
+control = "trk"
+position = "2,3"
+mode = "xplane"
+label = "FPA"
+
+[[tiles]]
+type = "a320_fcu"
+control = "vs"
+position = "2,4"
+mode = "xplane"
+label = "V/S"
 "##;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,6 +198,8 @@ pub struct QDeckConfig {
     pub default_mode: String,
     /// List of available modes to toggle through when clicking the mode tile
     pub modes: Vec<String>,
+    /// X-Plane UDP address (default "127.0.0.1:49000")
+    pub xplane_addr: String,
     /// Color and threshold theme
     pub theme: ThemeConfig,
     /// Configured tiles on the deck
@@ -109,61 +209,25 @@ pub struct QDeckConfig {
 impl Default for QDeckConfig {
     fn default() -> Self {
         Self {
-            brightness: 85,
+            brightness: 90,
             refresh_ms: 1000,
             vid: 0x0fd9,
             pid: None,
             serial: None,
             background_mode: "grid".to_string(),
             default_mode: "dashboard".to_string(),
-            modes: vec!["dashboard".to_string(), "gaming".to_string()],
+            modes: vec!["dashboard".to_string(), "xplane".to_string()],
+            xplane_addr: "127.0.0.1:49000".to_string(),
             theme: ThemeConfig::default(),
-            tiles: vec![
-                TileConfig {
-                    position: Some("top-left".to_string()),
-                    key: None,
-                    row: None,
-                    col: None,
-                    tile_type: "mode".to_string(),
-                    mode: Some("*".to_string()),
-                    label: Some("MODE".to_string()),
-                    app: None,
-                    on_click: None,
-                    warn_threshold: None,
-                    crit_threshold: None,
-                },
-                TileConfig {
-                    position: Some("0,3".to_string()),
-                    key: None,
-                    row: None,
-                    col: None,
-                    tile_type: "gpu".to_string(),
-                    mode: Some("dashboard".to_string()),
-                    label: Some("GPU".to_string()),
-                    app: Some("Activity Monitor".to_string()),
-                    on_click: None,
-                    warn_threshold: None,
-                    crit_threshold: None,
-                },
-                TileConfig {
-                    position: Some("top-right".to_string()),
-                    key: None,
-                    row: None,
-                    col: None,
-                    tile_type: "cpu".to_string(),
-                    mode: Some("dashboard".to_string()),
-                    label: Some("CPU".to_string()),
-                    app: Some("Activity Monitor".to_string()),
-                    on_click: None,
-                    warn_threshold: None,
-                    crit_threshold: None,
-                },
-            ],
+            tiles: Vec::new(),
         }
     }
 }
 
 impl QDeckConfig {
+    pub fn builtin_default() -> Self {
+        toml::from_str(DEFAULT_CONFIG_TOML).unwrap_or_default()
+    }
     /// Returns the ordered list of modes (always starting with `default_mode` or `"dashboard"`),
     /// including any additional modes referenced by tiles.
     pub fn effective_modes(&self) -> Vec<String> {
@@ -194,9 +258,14 @@ impl QDeckConfig {
     }
 
     /// Returns the active tile for `key_idx` in `active_mode`.
-    pub fn tile_for_key(&self, key_idx: u8, cols: u8, total_keys: u8, active_mode: &str) -> Option<&TileConfig> {
+    pub fn tile_for_key(
+        &self,
+        key_idx: u8,
+        cols: u8,
+        total_keys: u8,
+        active_mode: &str,
+    ) -> Option<&TileConfig> {
         let active_norm = active_mode.trim().to_ascii_lowercase();
-        // Prefer mode-specific tile first, then wildcard ("*" / "all") tile
         if let Some(t) = self.tiles.iter().find(|t| {
             t.resolve_key(cols, total_keys) == Some(key_idx)
                 && t.matches_mode(&active_norm, false)
@@ -279,7 +348,6 @@ impl ThemeConfig {
 }
 
 impl ResolvedTheme {
-    /// Returns the appropriate attention color (phosphor green, amber, or red) for a 0..100% value
     pub fn color_for_pct(
         &self,
         pct: f32,
@@ -308,11 +376,15 @@ pub struct TileConfig {
     pub row: Option<u8>,
     /// Explicit 0-based column index
     pub col: Option<u8>,
-    /// Tile type: "mode", "cpu", "gpu", "memory", "ops_status", "launcher"
+    /// Tile type: "mode", "cpu", "gpu", "memory", "a320_fcu", "ops_status", "launcher"
     #[serde(rename = "type", alias = "widget", alias = "kind")]
     pub tile_type: String,
-    /// Optional mode this tile belongs to (e.g. "dashboard", "gaming", or "*" for all modes)
+    /// Optional mode this tile belongs to (e.g. "dashboard", "xplane", or "*" for all modes)
     pub mode: Option<String>,
+    /// Optional A320 / X-Plane control identifier (e.g. "ap1", "ap2", "athr", "fd", "loc", "appr", "exped", "hdg", "alt", "spd", "trk", "vs", "master_warn", "master_caut")
+    pub control: Option<String>,
+    /// Optional explicit X-Plane UDP command string (e.g. "sim/autopilot/servos_toggle")
+    pub xplane_cmd: Option<String>,
     /// Optional custom label on the tile
     pub label: Option<String>,
     /// Optional macOS application name to open when clicked (e.g. "Activity Monitor")
@@ -329,6 +401,10 @@ pub struct TileConfig {
 #[derive(Debug, Clone)]
 pub enum ClickAction {
     CycleMode,
+    XPlaneControl {
+        control: String,
+        custom_cmd: Option<String>,
+    },
     OpenApp(String),
     ShellCommand(String),
     TriggerDemoSpike,
@@ -340,6 +416,13 @@ impl TileConfig {
         matches!(
             self.tile_type.trim().to_ascii_lowercase().as_str(),
             "mode" | "mode_selector"
+        )
+    }
+
+    pub fn is_a320_fcu(&self) -> bool {
+        matches!(
+            self.tile_type.trim().to_ascii_lowercase().as_str(),
+            "a320_fcu" | "xplane" | "fcu" | "a320"
         )
     }
 
@@ -364,6 +447,16 @@ impl TileConfig {
     pub fn click_action(&self) -> ClickAction {
         if self.is_mode_selector() {
             return ClickAction::CycleMode;
+        }
+        if self.is_a320_fcu() || self.control.is_some() || self.xplane_cmd.is_some() {
+            let ctrl = self
+                .control
+                .clone()
+                .unwrap_or_else(|| self.tile_type.clone());
+            return ClickAction::XPlaneControl {
+                control: ctrl,
+                custom_cmd: self.xplane_cmd.clone(),
+            };
         }
         if let Some(cmd) = &self.on_click {
             if !cmd.trim().is_empty() {
@@ -504,7 +597,7 @@ impl QDeckConfig {
             }
         }
 
-        Ok((Self::default(), PathBuf::from("built-in defaults")))
+        Ok((Self::builtin_default(), PathBuf::from("built-in defaults")))
     }
 
     fn try_load_manifest(path: &Path) -> Result<Option<Self>> {

@@ -3,6 +3,7 @@ use crate::font::{
     draw_corner_brackets, draw_hline, draw_rect_border, draw_text_3x5, draw_text_5x7, fill_rect,
     put_px, scale_color, text_width_5x7,
 };
+use crate::xplane::A320FcuState;
 use image::RgbImage;
 
 pub struct TelemetrySnapshot<'a> {
@@ -18,6 +19,7 @@ pub struct TelemetrySnapshot<'a> {
     pub next_mode: &'a str,
     pub mode_index: usize,
     pub total_modes: usize,
+    pub fcu: &'a A320FcuState,
     pub tick: u64,
     pub demo_mode_active: bool,
 }
@@ -575,3 +577,196 @@ pub fn render_standby_tile(
 
     img
 }
+
+/// Renders an Airbus A320 FCU (Flight Control Unit) / Glare-Shield control tile for X-Plane.
+pub fn render_a320_fcu_tile(
+    width: u32,
+    height: u32,
+    tile: &TileConfig,
+    theme: &ResolvedTheme,
+    telemetry: &TelemetrySnapshot,
+    is_highlighted: bool,
+) -> RgbImage {
+    let w = width as i32;
+    let h = height as i32;
+    let fcu = telemetry.fcu;
+    let ctrl = tile
+        .control
+        .as_deref()
+        .unwrap_or(&tile.tile_type)
+        .trim()
+        .to_ascii_lowercase();
+
+    let mut img = RgbImage::from_pixel(
+        width,
+        height,
+        if is_highlighted {
+            scale_color(theme.phosphor_green, 0.20)
+        } else {
+            theme.background
+        },
+    );
+
+    match ctrl.as_str() {
+        // --- Airbus Glare-Shield Master Warning (Red) & Master Caution (Amber) ---
+        "master_warn" | "warn" | "master_caut" | "caut" | "caution" => {
+            let is_warn = ctrl.contains("warn");
+            let active = if is_warn {
+                fcu.master_warn
+            } else {
+                fcu.master_caut
+            };
+            let alert_col = if is_warn { theme.red } else { theme.amber };
+
+            if active {
+                fill_rect(&mut img, 3, 3, w - 6, h - 6, scale_color(alert_col, 0.22));
+                draw_rect_border(&mut img, 2, 2, w - 4, h - 4, 2, alert_col);
+            } else {
+                draw_rect_border(&mut img, 4, 4, w - 8, h - 8, 1, theme.grid_dim);
+            }
+
+            let fg = if active {
+                alert_col
+            } else {
+                theme.phosphor_dim
+            };
+            let line1 = "MASTER";
+            let line2 = if is_warn { "WARN" } else { "CAUT" };
+            let w1 = text_width_5x7(line1, 1);
+            let w2 = text_width_5x7(line2, 1);
+            draw_text_5x7(&mut img, (w - w1) / 2, 22, line1, 1, fg);
+            draw_text_5x7(&mut img, (w - w2) / 2, 38, line2, 1, fg);
+        }
+
+        // --- Airbus FCU Digital Windows (SPD, HDG, ALT, HDG/TRK, V/S) ---
+        "spd" | "speed" | "spd_mach" | "hdg" | "heading" | "alt" | "altitude" | "trk"
+        | "hdg_trk" | "vs" | "vs_zero" => {
+            let (hdr, val_str, is_managed) = match ctrl.as_str() {
+                "spd" | "speed" | "spd_mach" => {
+                    let s = if fcu.spd_managed {
+                        "---".to_string()
+                    } else {
+                        format!("{:03.0}", fcu.spd_kts.clamp(100.0, 399.0))
+                    };
+                    ("SPD", s, fcu.spd_managed)
+                }
+                "hdg" | "heading" => {
+                    let s = if fcu.hdg_managed {
+                        "---".to_string()
+                    } else {
+                        format!("{:03.0}", fcu.hdg_deg.rem_euclid(360.0))
+                    };
+                    (if fcu.trk_fpa_mode { "TRK" } else { "HDG" }, s, fcu.hdg_managed)
+                }
+                "alt" | "altitude" => {
+                    let s = format!("{:05.0}", fcu.alt_ft.clamp(0.0, 49000.0));
+                    ("ALT", s, fcu.alt_managed)
+                }
+                "trk" | "hdg_trk" => {
+                    let mode_str = if fcu.trk_fpa_mode {
+                        "TRK/FPA"
+                    } else {
+                        "HDG/V/S"
+                    };
+                    ("FPA", mode_str.to_string(), !fcu.trk_fpa_mode)
+                }
+                _ => {
+                    let v = fcu.vs_fpm.round() as i32;
+                    let s = if v == 0 {
+                        "0000".to_string()
+                    } else {
+                        format!("{:+05}", v)
+                    };
+                    ("V/S", s, v == 0)
+                }
+            };
+
+            let label = tile.label.as_deref().unwrap_or(hdr);
+            // Selected mode uses Amber (pilot attention / non-managed), Managed uses Phosphor Green
+            let main_col = if is_managed {
+                theme.phosphor_green
+            } else {
+                theme.amber
+            };
+
+            draw_rect_border(&mut img, 3, 3, w - 6, h - 6, 1, theme.grid_dim);
+            draw_text_5x7(&mut img, 7, 7, label, 1, theme.phosphor_dim);
+
+            // Airbus Managed Dot (●) on top-right when managed, or "SEL" in Amber when selected
+            if is_managed {
+                fill_rect(&mut img, w - 13, 8, 5, 5, theme.phosphor_green);
+            } else {
+                draw_text_3x5(&mut img, w - 18, 8, "SEL", 1, theme.amber);
+            }
+
+            // LCD Readout Window
+            fill_rect(&mut img, 6, 22, w - 12, 25, scale_color(main_col, 0.10));
+            draw_rect_border(&mut img, 6, 22, w - 12, 25, 1, scale_color(main_col, 0.45));
+
+            let vw = text_width_5x7(&val_str, 1);
+            draw_text_5x7(&mut img, ((w - vw) / 2).max(8), 31, &val_str, 1, main_col);
+
+            let sub = if is_managed { "MANAGED" } else { "SELECTED" };
+            let sw = (sub.len() as i32) * 4 - 1;
+            draw_text_3x5(&mut img, (w - sw) / 2, h - 13, sub, 1, theme.phosphor_dim);
+        }
+
+        // --- Classic Airbus A320 Korry 3-Bar Pushbuttons (AP 1, AP 2, A/THR, FD, LOC, EXPED, APPR) ---
+        _ => {
+            let (default_label, engaged) = match ctrl.as_str() {
+                "ap1" | "ap_1" => ("AP 1", fcu.ap1_on),
+                "ap2" | "ap_2" => ("AP 2", fcu.ap2_on),
+                "athr" | "a/thr" | "autothrottle" => ("A/THR", fcu.athr_on),
+                "fd" | "fd1" | "flight_director" => ("FD 1", fcu.fd_on),
+                "loc" | "localizer" => ("LOC", fcu.loc_on),
+                "exped" | "expedite" => ("EXPED", fcu.exped_on),
+                "appr" | "approach" => ("APPR", fcu.appr_on),
+                _ => ("FCU", false),
+            };
+
+            let label = tile.label.as_deref().unwrap_or(default_label);
+            let outer_col = if engaged {
+                scale_color(theme.phosphor_green, 0.65)
+            } else {
+                theme.grid_dim
+            };
+
+            // Outer Korry switch bezel
+            draw_rect_border(&mut img, 4, 4, w - 8, h - 8, 1, outer_col);
+            // Horizontal divider between top 3-bar annunciator window and bottom legend
+            draw_hline(&mut img, 5, 31, w - 10, theme.grid_dim);
+
+            // Top Window: Iconic Airbus 3 horizontal green bars [ ▬  ▬  ▬ ]
+            let bar_color = if engaged {
+                theme.phosphor_green
+            } else {
+                scale_color(theme.phosphor_dim, 0.16)
+            };
+            let bar_w = 13;
+            let bar_h = 5;
+            let bar_gap = 4;
+            let total_bars_w = 3 * bar_w + 2 * bar_gap;
+            let start_x = (w - total_bars_w) / 2;
+            for b in 0..3 {
+                let bx = start_x + b * (bar_w + bar_gap);
+                fill_rect(&mut img, bx, 15, bar_w, bar_h, bar_color);
+            }
+
+            // Bottom Window: Backlit Legend ("AP 1", "A/THR", "LOC", "APPR", etc.)
+            let legend_col = if engaged {
+                theme.phosphor_green
+            } else {
+                theme.phosphor_dim
+            };
+            let lw = text_width_5x7(label, 1);
+            draw_text_5x7(&mut img, ((w - lw) / 2).max(6), 45, label, 1, legend_col);
+        }
+    }
+
+    if is_highlighted {
+        draw_rect_border(&mut img, 0, 0, w, h, 2, theme.phosphor_green);
+    }
+
+    img
+}
+

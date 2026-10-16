@@ -1,6 +1,7 @@
 mod config;
 mod font;
 mod widgets;
+mod xplane;
 
 use anyhow::{Context, Result, anyhow};
 use config::{ClickAction, QDeckConfig, ResolvedTheme};
@@ -14,9 +15,11 @@ use std::time::{Duration, Instant, SystemTime};
 use streamdeck::{Colour, Kind, StreamDeck, pids};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use widgets::{
-    TelemetrySnapshot, render_cpu_tile, render_gpu_tile, render_launcher_tile, render_memory_tile,
-    render_mode_tile, render_ops_status_tile, render_standby_tile,
+    TelemetrySnapshot, render_a320_fcu_tile, render_cpu_tile, render_gpu_tile,
+    render_launcher_tile, render_memory_tile, render_mode_tile, render_ops_status_tile,
+    render_standby_tile,
 };
+use xplane::{A320FcuState, XPlaneClient};
 
 const TAP_HIGHLIGHT_DURATION: Duration = Duration::from_millis(120);
 
@@ -111,7 +114,7 @@ fn file_mtime(path: &Path) -> Option<SystemTime> {
 fn is_dynamic_telemetry_tile(tile_type: &str) -> bool {
     matches!(
         tile_type.trim().to_ascii_lowercase().as_str(),
-        "cpu" | "gpu" | "memory" | "ram" | "ops_status" | "status"
+        "cpu" | "gpu" | "memory" | "ram" | "ops_status" | "status" | "a320_fcu" | "xplane" | "fcu" | "a320"
     )
 }
 
@@ -155,6 +158,14 @@ fn render_key_to_deck(
                 is_highlighted,
             ),
             "memory" | "ram" => render_memory_tile(
+                img_w as u32,
+                img_h as u32,
+                tile,
+                theme,
+                snapshot,
+                is_highlighted,
+            ),
+            "a320_fcu" | "xplane" | "fcu" | "a320" => render_a320_fcu_tile(
                 img_w as u32,
                 img_h as u32,
                 tile,
@@ -214,7 +225,10 @@ fn apply_mode_layout(
                 k,
                 k / cols,
                 k % cols,
-                tile.label.as_deref().unwrap_or(&tile.tile_type),
+                tile.label
+                    .as_deref()
+                    .or(tile.control.as_deref())
+                    .unwrap_or(&tile.tile_type),
                 tile.tile_type,
                 tile.click_action()
             );
@@ -252,6 +266,7 @@ fn build_snapshot<'a>(
     next_mode: &'a str,
     mode_index: usize,
     total_modes: usize,
+    fcu: &'a A320FcuState,
     tick: u64,
     in_demo: bool,
 ) -> TelemetrySnapshot<'a> {
@@ -300,6 +315,7 @@ fn build_snapshot<'a>(
         next_mode,
         mode_index,
         total_modes,
+        fcu,
         tick,
         demo_mode_active: in_demo,
     }
@@ -344,8 +360,10 @@ fn main() -> Result<()> {
     println!("  Config file: {}", cfg_path.display());
     println!("  Refresh interval: {}ms", cfg.refresh_ms.max(250));
     println!("  Modes: {:?} (default: '{}')", modes, modes[mode_idx]);
+    println!("  X-Plane UDP Endpoint: {}", cfg.xplane_addr);
     println!("====================================================");
 
+    let mut xplane = XPlaneClient::new(&cfg.xplane_addr);
     let mut deck = connect_deck(&cfg)?;
     let kind = deck.kind();
     let total_keys = kind.keys();
@@ -374,8 +392,6 @@ fn main() -> Result<()> {
     let (mut gpu_cores, mut live_gpu_pct) = query_macos_gpu_stats(16);
     println!("[QDECK] Detected GPU Cores: {}", gpu_cores);
 
-    // Use blocking mode with timed `read_buttons(Some(wait_duration))` so the process sleeps
-    // inside the kernel IOKit event wait (0% CPU between 1-second ticks) and wakes immediately on button press.
     let _ = deck.set_blocking(true);
 
     let mut sys = System::new_with_specifics(
@@ -405,6 +421,7 @@ fn main() -> Result<()> {
             next_mode,
             mode_idx,
             total_modes,
+            &xplane.state,
             tick,
             false,
         );
@@ -426,9 +443,6 @@ fn main() -> Result<()> {
         let refresh_interval = Duration::from_millis(cfg.refresh_ms.max(250));
         let now = Instant::now();
 
-        // Compute how long we can sleep in kernel HID wait until either:
-        // 1) An active 120ms tap highlight expires, OR
-        // 2) The 1-second telemetry refresh interval is due
         let next_telemetry_in = refresh_interval.saturating_sub(now.duration_since(last_render));
         let next_highlight_expiry = highlight_until
             .iter()
@@ -443,6 +457,7 @@ fn main() -> Result<()> {
 
         let mut newly_highlighted_keys: Vec<u8> = Vec::new();
         let mut mode_switched = false;
+        let mut fcu_changed = false;
 
         if let Ok(buttons) = deck.read_buttons(Some(wait_duration)) {
             let press_time = Instant::now();
@@ -459,6 +474,17 @@ fn main() -> Result<()> {
                                 mode_idx = (mode_idx + 1) % modes.len().max(1);
                                 println!("[QDECK] Mode toggled -> '{}'", modes[mode_idx]);
                                 mode_switched = true;
+                            }
+                            ClickAction::XPlaneControl {
+                                control,
+                                custom_cmd,
+                            } => {
+                                println!(
+                                    "[QDECK] [X-Plane A320] Triggered FCU control '{}' -> UDP {}",
+                                    control, cfg.xplane_addr
+                                );
+                                xplane.trigger_a320_control(&control, custom_cmd.as_deref());
+                                fcu_changed = true;
                             }
                             ClickAction::OpenApp(app_name) => {
                                 println!(
@@ -522,13 +548,13 @@ fn main() -> Result<()> {
                 next_mode,
                 mode_idx,
                 total_modes,
+                &xplane.state,
                 tick,
                 in_demo,
             );
             let _ = apply_mode_layout(
                 &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, &snapshot,
             );
-            // Keep the mode button briefly flashed after toggle
             for &key_u8 in &newly_highlighted_keys {
                 let _ = render_key_to_deck(
                     &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, key_u8, &snapshot,
@@ -539,7 +565,7 @@ fn main() -> Result<()> {
             continue;
         }
 
-        if !newly_highlighted_keys.is_empty() || !expired_highlight_keys.is_empty() {
+        if fcu_changed || !newly_highlighted_keys.is_empty() || !expired_highlight_keys.is_empty() {
             let total_modes = modes.len().max(1);
             let active_mode = &modes[mode_idx];
             let next_mode = &modes[(mode_idx + 1) % total_modes];
@@ -552,15 +578,37 @@ fn main() -> Result<()> {
                 next_mode,
                 mode_idx,
                 total_modes,
+                &xplane.state,
                 tick,
                 in_demo,
             );
-            for key_u8 in newly_highlighted_keys {
-                let _ = render_key_to_deck(
-                    &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, key_u8, &snapshot,
-                    true,
-                );
+
+            if fcu_changed {
+                // Re-render all FCU tiles in the current mode so linked annunciators
+                // (e.g. AP disconnect -> MASTER WARN red, A/THR disconnect -> MASTER CAUT amber) update immediately
+                for k in 0..total_keys {
+                    if let Some(t) = cfg.tile_for_key(k, cols, total_keys, active_mode) {
+                        if t.is_a320_fcu() {
+                            let is_hi = highlight_until
+                                .get(k as usize)
+                                .and_then(|&d| d)
+                                .is_some_and(|deadline| Instant::now() < deadline);
+                            let _ = render_key_to_deck(
+                                &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, k,
+                                &snapshot, is_hi,
+                            );
+                        }
+                    }
+                }
+            } else {
+                for key_u8 in newly_highlighted_keys {
+                    let _ = render_key_to_deck(
+                        &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, key_u8,
+                        &snapshot, true,
+                    );
+                }
             }
+
             for key_u8 in expired_highlight_keys {
                 let _ = render_key_to_deck(
                     &mut deck, &cfg, &theme, cols, total_keys, img_w, img_h, key_u8, &snapshot,
@@ -571,7 +619,6 @@ fn main() -> Result<()> {
 
         // Once-per-second telemetry & config check
         if last_render.elapsed() >= refresh_interval {
-            // Check config file modification once per second
             let current_mtime = file_mtime(&cfg_path);
             if current_mtime != last_mtime && current_mtime.is_some() {
                 last_mtime = current_mtime;
@@ -583,6 +630,7 @@ fn main() -> Result<()> {
                         );
                         let prev_mode_name = modes.get(mode_idx).cloned().unwrap_or_default();
                         cfg = new_cfg;
+                        xplane.set_target_addr(&cfg.xplane_addr);
                         theme = cfg.theme.resolve();
                         modes = cfg.effective_modes();
                         mode_idx = modes
@@ -601,6 +649,7 @@ fn main() -> Result<()> {
                             next_mode,
                             mode_idx,
                             total_modes,
+                            &xplane.state,
                             tick,
                             in_demo,
                         );
@@ -618,16 +667,17 @@ fn main() -> Result<()> {
             let active_mode = &modes[mode_idx];
             let next_mode = &modes[(mode_idx + 1) % total_modes];
 
-            // Only poll the system sensors needed by the currently active mode's tiles
             let mut needs_cpu = false;
             let mut needs_gpu = false;
             let mut needs_mem = false;
+            let mut needs_xplane = false;
             for k in 0..total_keys {
                 if let Some(t) = cfg.tile_for_key(k, cols, total_keys, active_mode) {
                     match t.tile_type.trim().to_ascii_lowercase().as_str() {
                         "cpu" => needs_cpu = true,
                         "gpu" => needs_gpu = true,
                         "memory" | "ram" => needs_mem = true,
+                        "a320_fcu" | "xplane" | "fcu" | "a320" => needs_xplane = true,
                         "ops_status" | "status" => {
                             needs_cpu = true;
                             needs_gpu = true;
@@ -648,6 +698,10 @@ fn main() -> Result<()> {
                 gpu_cores = detected_cores;
                 live_gpu_pct = gpu_util;
             }
+            if needs_xplane {
+                xplane.ensure_subscribed();
+                xplane.poll_incoming();
+            }
 
             let snapshot = build_snapshot(
                 &sys,
@@ -658,11 +712,11 @@ fn main() -> Result<()> {
                 next_mode,
                 mode_idx,
                 total_modes,
+                &xplane.state,
                 tick,
                 in_demo,
             );
 
-            // Only re-render dynamic telemetry tiles on the 1-second tick
             for k in 0..total_keys {
                 if let Some(tile) = cfg.tile_for_key(k, cols, total_keys, active_mode) {
                     if is_dynamic_telemetry_tile(&tile.tile_type) {
