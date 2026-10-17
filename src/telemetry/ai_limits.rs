@@ -1,15 +1,16 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-const AI_LIMITS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const AI_LIMITS_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
 
-/// Utilization percentages for a single AI provider's rolling Session (5h) and Weekly (7d) windows.
+/// Utilization percentages for Claude's rolling 5-hour Session (`SES`) and 7-day Weekly (`WK`) windows.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct AiProviderLimits {
+pub struct ClaudeLimits {
     /// 5-hour session utilization percentage (`0.0..=100.0`)
     pub session_pct: f32,
     /// 7-day weekly utilization percentage (`0.0..=100.0`)
@@ -18,10 +19,29 @@ pub struct AiProviderLimits {
     pub available: bool,
 }
 
+/// Utilization percentages for Google Gemini / Antigravity model quota pools:
+/// - View 0 (`1/2`): Gemini 4 Argon (`ARG`) & Gemini 3.8 Flash (`FLS`)
+/// - View 1 (`2/2`): Claude (`CLD`) & GPT-OSS (`GPT`)
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct GeminiLimits {
+    /// Gemini 4 Argon utilization percentage (`0.0..=100.0`)
+    pub argon_pct: f32,
+    /// Gemini 3.8 Flash utilization percentage (`0.0..=100.0`)
+    pub flash_pct: f32,
+    /// Antigravity Claude (Opus/Sonnet) utilization percentage (`0.0..=100.0`)
+    pub claude_pct: f32,
+    /// Antigravity GPT-OSS utilization percentage (`0.0..=100.0`)
+    pub gpt_pct: f32,
+    /// Active toggle view (`0` = Argon + Flash, `1` = Claude + GPT)
+    pub view_index: u8,
+    /// Whether live quota telemetry has been successfully retrieved
+    pub available: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AiLimitsState {
-    pub claude: AiProviderLimits,
-    pub gemini: AiProviderLimits,
+    pub claude: ClaudeLimits,
+    pub gemini: GeminiLimits,
 }
 
 struct AiLimitsWorker {
@@ -30,6 +50,16 @@ struct AiLimitsWorker {
 }
 
 static AI_LIMITS_WORKER: OnceLock<Arc<AiLimitsWorker>> = OnceLock::new();
+static GEMINI_VIEW_INDEX: AtomicU8 = AtomicU8::new(0);
+
+/// Cycles the active Gemini tile view (`0`: Argon + Flash <-> `1`: Claude + GPT)
+/// and returns the new view index.
+pub fn toggle_gemini_view() -> u8 {
+    let prev = GEMINI_VIEW_INDEX.load(Ordering::Relaxed);
+    let next = (prev + 1) % 2;
+    GEMINI_VIEW_INDEX.store(next, Ordering::Relaxed);
+    next
+}
 
 fn get_or_start_worker() -> &'static Arc<AiLimitsWorker> {
     AI_LIMITS_WORKER.get_or_init(|| {
@@ -69,10 +99,12 @@ fn get_or_start_worker() -> &'static Arc<AiLimitsWorker> {
 }
 
 /// Returns the most recently cached Claude and Gemini usage limits without blocking the render thread,
-/// starting the background 60-second poller if not already running.
+/// starting the background 15-second poller if not already running.
 pub fn current_ai_limits() -> AiLimitsState {
     let worker = get_or_start_worker();
-    worker.state.lock().map(|g| *g).unwrap_or_default()
+    let mut state = worker.state.lock().map(|g| *g).unwrap_or_default();
+    state.gemini.view_index = GEMINI_VIEW_INDEX.load(Ordering::Relaxed);
+    state
 }
 
 /// Requests an immediate asynchronous refresh of Claude and Gemini usage limits.
@@ -86,7 +118,7 @@ pub fn request_ai_limits_refresh() {
 }
 
 /// Fetches Claude session (`five_hour`) and weekly (`seven_day`) utilization from Anthropic's OAuth usage endpoint.
-pub fn fetch_claude_limits() -> Option<AiProviderLimits> {
+pub fn fetch_claude_limits() -> Option<ClaudeLimits> {
     let token = read_claude_oauth_token()?;
     let auth_header = format!("Authorization: Bearer {token}");
     let output = Command::new("curl")
@@ -139,19 +171,20 @@ fn read_claude_oauth_token() -> Option<String> {
 }
 
 /// Parses Anthropic `/api/oauth/usage` JSON for `five_hour.utilization` and `seven_day.utilization`.
-pub fn parse_claude_usage_json(json: &str) -> Option<AiProviderLimits> {
+pub fn parse_claude_usage_json(json: &str) -> Option<ClaudeLimits> {
     let session_pct = extract_nested_f32(json, "\"five_hour\"", "\"utilization\"")?;
     let weekly_pct = extract_nested_f32(json, "\"seven_day\"", "\"utilization\"").unwrap_or(0.0);
 
-    Some(AiProviderLimits {
+    Some(ClaudeLimits {
         session_pct: session_pct.clamp(0.0, 100.0),
         weekly_pct: weekly_pct.clamp(0.0, 100.0),
         available: true,
     })
 }
 
-/// Fetches Google Gemini session (Flash 5h) and weekly (Argon/Pro 7d) limits from the local Antigravity language server.
-pub fn fetch_gemini_limits() -> Option<AiProviderLimits> {
+/// Fetches live Google Gemini / Antigravity model limits (`Argon`, `Flash`, `Claude`, `GPT`)
+/// from the local Antigravity `language_server` via `GetCascadeModelConfigData` (with `GetUserStatus` fallback).
+pub fn fetch_gemini_limits() -> Option<GeminiLimits> {
     let ps_out = Command::new("ps")
         .args(["-ax", "-o", "pid=,command="])
         .output()
@@ -167,37 +200,39 @@ pub fn fetch_gemini_limits() -> Option<AiProviderLimits> {
     let ports = parse_lsof_listen_ports(&lsof_text);
 
     let csrf_header = format!("x-codeium-csrf-token: {csrf_token}");
-    for port in ports.into_iter().take(4) {
-        for scheme in ["https", "http"] {
-            let url = format!(
-                "{scheme}://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/GetUserStatus"
-            );
-            let Ok(output) = Command::new("curl")
-                .args([
-                    "-sk",
-                    "--max-time",
-                    "2",
-                    "-X",
-                    "POST",
-                    &url,
-                    "-H",
-                    "Content-Type: application/json",
-                    "-H",
-                    "Connect-Protocol-Version: 1",
-                    "-H",
-                    &csrf_header,
-                    "-d",
-                    r#"{"metadata":{"ideName":"antigravity","extensionName":"antigravity","locale":"en"}}"#,
-                ])
-                .output()
-            else {
-                continue;
-            };
+    for rpc in ["GetCascadeModelConfigData", "GetUserStatus"] {
+        for &port in ports.iter().take(4) {
+            for scheme in ["http", "https"] {
+                let url = format!(
+                    "{scheme}://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/{rpc}"
+                );
+                let Ok(output) = Command::new("curl")
+                    .args([
+                        "-sk",
+                        "--max-time",
+                        "2",
+                        "-X",
+                        "POST",
+                        &url,
+                        "-H",
+                        "Content-Type: application/json",
+                        "-H",
+                        "Connect-Protocol-Version: 1",
+                        "-H",
+                        &csrf_header,
+                        "-d",
+                        r#"{"metadata":{"ideName":"antigravity","extensionName":"antigravity","locale":"en"}}"#,
+                    ])
+                    .output()
+                else {
+                    continue;
+                };
 
-            if output.status.success() {
-                let body = String::from_utf8_lossy(&output.stdout);
-                if let Some(limits) = parse_gemini_status_json(&body) {
-                    return Some(limits);
+                if output.status.success() {
+                    let body = String::from_utf8_lossy(&output.stdout);
+                    if let Some(limits) = parse_gemini_status_json(&body) {
+                        return Some(limits);
+                    }
                 }
             }
         }
@@ -245,14 +280,20 @@ pub fn parse_lsof_listen_ports(lsof_text: &str) -> Vec<u16> {
     ports
 }
 
-/// Parses Antigravity `GetUserStatus` JSON for Gemini Flash (5h session) and Gemini Argon/Pro (7d weekly) used %.
-pub fn parse_gemini_status_json(json: &str) -> Option<AiProviderLimits> {
+/// Parses Antigravity `GetCascadeModelConfigData` / `GetUserStatus` JSON for:
+/// - `argon_pct` (Gemini Argon)
+/// - `flash_pct` (Gemini Flash)
+/// - `claude_pct` (Claude Opus/Sonnet)
+/// - `gpt_pct` (GPT-OSS)
+pub fn parse_gemini_status_json(json: &str) -> Option<GeminiLimits> {
     if !json.contains("\"clientModelConfigs\"") {
         return None;
     }
 
-    let mut session_pct: Option<f32> = None;
-    let mut weekly_pct: Option<f32> = None;
+    let mut argon_pct: Option<f32> = None;
+    let mut flash_pct: Option<f32> = None;
+    let mut claude_pct: Option<f32> = None;
+    let mut gpt_pct: Option<f32> = None;
     let mut search_from = 0;
 
     while let Some(rel_pos) = json[search_from..].find("\"label\"") {
@@ -264,35 +305,43 @@ pub fn parse_gemini_status_json(json: &str) -> Option<AiProviderLimits> {
             .unwrap_or(json.len());
         let chunk = &json[label_key_pos..next_label_pos];
 
-        if let Some(label) = extract_json_string_field(chunk, "label") {
+        if let Some(label) = extract_json_string_field(chunk, "label")
+            && chunk.contains("\"quotaInfo\"")
+        {
             let lower = label.to_ascii_lowercase();
-            if lower.contains("gemini") && chunk.contains("\"quotaInfo\"") {
-                let rem = extract_nested_f32(chunk, "\"quotaInfo\"", "\"remainingFraction\"")
-                    .unwrap_or(1.0)
-                    .clamp(0.0, 1.0);
-                let used_pct = ((1.0 - rem) * 100.0).clamp(0.0, 100.0);
+            let rem = extract_nested_f32(chunk, "\"quotaInfo\"", "\"remainingFraction\"")
+                .unwrap_or(1.0)
+                .clamp(0.0, 1.0);
+            let used_pct = ((1.0 - rem) * 100.0).clamp(0.0, 100.0);
 
-                if lower.contains("flash") {
-                    session_pct = Some(used_pct);
-                } else if lower.contains("argon")
-                    || lower.contains("pro")
-                    || lower.contains("ultra")
-                {
-                    weekly_pct = Some(used_pct);
-                }
+            if lower.contains("gemini") && lower.contains("flash") {
+                flash_pct = Some(used_pct);
+            } else if lower.contains("gemini")
+                && (lower.contains("argon") || lower.contains("pro") || lower.contains("ultra"))
+            {
+                argon_pct = Some(used_pct);
+            } else if lower.contains("claude") {
+                claude_pct = Some(used_pct);
+            } else if lower.contains("gpt") {
+                gpt_pct = Some(used_pct);
             }
         }
 
         search_from = next_label_pos;
     }
 
-    if session_pct.is_none() && weekly_pct.is_none() {
+    if argon_pct.is_none() && flash_pct.is_none() && claude_pct.is_none() && gpt_pct.is_none() {
         return None;
     }
 
-    Some(AiProviderLimits {
-        session_pct: session_pct.unwrap_or(0.0),
-        weekly_pct: weekly_pct.unwrap_or(0.0),
+    let cld_or_gpt = claude_pct.or(gpt_pct).unwrap_or(0.0);
+
+    Some(GeminiLimits {
+        argon_pct: argon_pct.unwrap_or(0.0),
+        flash_pct: flash_pct.unwrap_or(0.0),
+        claude_pct: claude_pct.unwrap_or(cld_or_gpt),
+        gpt_pct: gpt_pct.unwrap_or(cld_or_gpt),
+        view_index: GEMINI_VIEW_INDEX.load(Ordering::Relaxed),
         available: true,
     })
 }
@@ -343,25 +392,31 @@ mod tests {
     #[test]
     fn test_parse_gemini_status_json() {
         let sample = r#"{
-            "userStatus": {
-                "cascadeModelConfigData": {
-                    "clientModelConfigs": [
-                        {
-                            "label": "Gemini 4 Argon (High)",
-                            "quotaInfo": {"remainingFraction": 0.416, "resetTime": "2026-10-24T07:04:32Z"}
-                        },
-                        {
-                            "label": "Gemini 3.8 Flash (High)",
-                            "quotaInfo": {"remainingFraction": 0.99, "resetTime": "2026-10-17T20:29:44Z"}
-                        }
-                    ]
+            "clientModelConfigs": [
+                {
+                    "label": "Gemini 4 Argon (High)",
+                    "quotaInfo": {"remainingFraction": 0.335, "resetTime": "2026-10-24T07:04:32Z"}
+                },
+                {
+                    "label": "Gemini 3.8 Flash (High)",
+                    "quotaInfo": {"remainingFraction": 0.976, "resetTime": "2026-10-17T20:29:44Z"}
+                },
+                {
+                    "label": "Claude Sonnet 5.5 (High)",
+                    "quotaInfo": {"remainingFraction": 0.85, "resetTime": "2026-10-17T20:50:28Z"}
+                },
+                {
+                    "label": "GPT-OSS 120B (Medium)",
+                    "quotaInfo": {"remainingFraction": 0.90, "resetTime": "2026-10-17T20:50:28Z"}
                 }
-            }
+            ]
         }"#;
         let limits = parse_gemini_status_json(sample).expect("Should parse Gemini status JSON");
         assert!(limits.available);
-        assert!((limits.session_pct - 1.0).abs() < 0.1);
-        assert!((limits.weekly_pct - 58.4).abs() < 0.1);
+        assert!((limits.argon_pct - 66.5).abs() < 0.1);
+        assert!((limits.flash_pct - 2.4).abs() < 0.1);
+        assert!((limits.claude_pct - 15.0).abs() < 0.1);
+        assert!((limits.gpt_pct - 10.0).abs() < 0.1);
     }
 
     #[test]

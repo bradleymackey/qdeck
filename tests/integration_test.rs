@@ -1,5 +1,5 @@
 use qdeck::config::{ClickAction, QDeckConfig};
-use qdeck::telemetry::AiProviderLimits;
+use qdeck::telemetry::{ClaudeLimits, GeminiLimits};
 use qdeck::widgets::{TelemetrySnapshot, render_tile_image};
 use qdeck::xplane::A320FcuState;
 use qdeck::xplane::commands::dispatch_control;
@@ -38,14 +38,17 @@ fn test_full_deck_matrix_across_all_modes_and_panels() {
                         mem_used_gb: 18.0,
                         mem_total_gb: 32.0,
                         swap_used_pct: 5.0,
-                        claude_limits: AiProviderLimits {
+                        claude_limits: ClaudeLimits {
                             session_pct: 12.0,
                             weekly_pct: 34.0,
                             available: true,
                         },
-                        gemini_limits: AiProviderLimits {
-                            session_pct: 8.0,
-                            weekly_pct: 58.0,
+                        gemini_limits: GeminiLimits {
+                            argon_pct: 66.0,
+                            flash_pct: 2.0,
+                            claude_pct: 10.0,
+                            gpt_pct: 5.0,
+                            view_index: 0,
                             available: true,
                         },
                         active_mode: mode,

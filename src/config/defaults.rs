@@ -57,7 +57,6 @@ type = "claude"
 position = "1,3"
 mode = "dashboard"
 label = "CLAUDE"
-app = "Claude"
 warn_threshold = 60.0
 crit_threshold = 85.0
 
@@ -66,7 +65,6 @@ type = "gemini"
 position = "1,4"
 mode = "dashboard"
 label = "GEMINI"
-app = "Antigravity"
 warn_threshold = 60.0
 crit_threshold = 85.0
 

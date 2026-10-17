@@ -1,8 +1,9 @@
 pub mod ai_limits;
 
 pub use ai_limits::{
-    AiLimitsState, AiProviderLimits, current_ai_limits, fetch_claude_limits, fetch_gemini_limits,
-    parse_claude_usage_json, parse_gemini_status_json, request_ai_limits_refresh,
+    AiLimitsState, ClaudeLimits, GeminiLimits, current_ai_limits, fetch_claude_limits,
+    fetch_gemini_limits, parse_claude_usage_json, parse_gemini_status_json,
+    request_ai_limits_refresh, toggle_gemini_view,
 };
 
 use crate::widgets::TelemetrySnapshot;
@@ -86,8 +87,8 @@ pub fn build_snapshot<'a>(
     core_buf: &'a mut Vec<f32>,
     gpu_cores: usize,
     live_gpu_pct: f32,
-    claude_limits: AiProviderLimits,
-    gemini_limits: AiProviderLimits,
+    claude_limits: ClaudeLimits,
+    gemini_limits: GeminiLimits,
     active_mode: &'a str,
     next_mode: &'a str,
     mode_index: usize,

@@ -1,9 +1,9 @@
 use super::TelemetrySnapshot;
 use crate::config::{ResolvedTheme, TileConfig};
 use crate::font::{
-    draw_hline, draw_rect_border, draw_text_5x7, fill_rect, scale_color, text_width_5x7,
+    draw_hline, draw_rect_border, draw_text_3x5, draw_text_5x7, fill_rect, scale_color,
+    text_width_5x7,
 };
-use crate::telemetry::AiProviderLimits;
 use image::RgbImage;
 
 /// Renders a Claude usage limits tile showing both 5-hour Session (`SES`) and 7-day Weekly (`WK`) utilization.
@@ -15,20 +15,28 @@ pub fn render_claude_limits_tile(
     telemetry: &TelemetrySnapshot,
     is_highlighted: bool,
 ) -> RgbImage {
+    let claude = telemetry.claude_limits;
     render_dual_limit_tile(
         width,
         height,
         tile,
         theme,
         "CLAUDE",
-        telemetry.claude_limits,
+        None,
+        "SES",
+        claude.session_pct,
+        "WK",
+        claude.weekly_pct,
+        claude.available,
         telemetry.tick,
         telemetry.demo_mode_active,
         is_highlighted,
     )
 }
 
-/// Renders a Google Gemini usage limits tile showing both Session (`SES`) and Weekly (`WK`) utilization.
+/// Renders a Google Gemini / Antigravity usage limits tile that toggles on click between:
+/// - View 0 (`1/2`): Gemini 4 Argon (`ARG`) + Gemini 3.8 Flash (`FLS`)
+/// - View 1 (`2/2`): Claude (`CLD`) + GPT-OSS (`GPT`)
 pub fn render_gemini_limits_tile(
     width: u32,
     height: u32,
@@ -37,13 +45,25 @@ pub fn render_gemini_limits_tile(
     telemetry: &TelemetrySnapshot,
     is_highlighted: bool,
 ) -> RgbImage {
+    let gem = telemetry.gemini_limits;
+    let (badge, row1_tag, row1_pct, row2_tag, row2_pct) = if gem.view_index.is_multiple_of(2) {
+        ("1/2", "ARG", gem.argon_pct, "FLS", gem.flash_pct)
+    } else {
+        ("2/2", "CLD", gem.claude_pct, "GPT", gem.gpt_pct)
+    };
+
     render_dual_limit_tile(
         width,
         height,
         tile,
         theme,
         "GEMINI",
-        telemetry.gemini_limits,
+        Some(badge),
+        row1_tag,
+        row1_pct,
+        row2_tag,
+        row2_pct,
+        gem.available,
         telemetry.tick,
         telemetry.demo_mode_active,
         is_highlighted,
@@ -57,7 +77,12 @@ fn render_dual_limit_tile(
     tile: &TileConfig,
     theme: &ResolvedTheme,
     default_label: &str,
-    limits: AiProviderLimits,
+    page_badge: Option<&str>,
+    row1_tag: &str,
+    row1_val: f32,
+    row2_tag: &str,
+    row2_val: f32,
+    limits_available: bool,
     tick: u64,
     demo_mode_active: bool,
     is_highlighted: bool,
@@ -78,20 +103,20 @@ fn render_dual_limit_tile(
     let warn = tile.warn_threshold.unwrap_or(theme.warn_threshold);
     let crit = tile.crit_threshold.unwrap_or(theme.crit_threshold);
 
-    let (ses_pct, wk_pct, available) = if demo_mode_active {
+    let (r1_pct, r2_pct, available) = if demo_mode_active {
         let phase = (tick as f32) * 0.65;
-        let sim_ses = (20.0 + ((phase * 0.9).sin() * 0.5 + 0.5) * 75.0).clamp(5.0, 96.0);
-        let sim_wk = (30.0 + ((phase * 0.6 + 1.2).sin() * 0.5 + 0.5) * 65.0).clamp(10.0, 95.0);
-        (sim_ses, sim_wk, true)
+        let sim_1 = (20.0 + ((phase * 0.9).sin() * 0.5 + 0.5) * 75.0).clamp(5.0, 96.0);
+        let sim_2 = (30.0 + ((phase * 0.6 + 1.2).sin() * 0.5 + 0.5) * 65.0).clamp(10.0, 95.0);
+        (sim_1, sim_2, true)
     } else {
         (
-            limits.session_pct.clamp(0.0, 100.0),
-            limits.weekly_pct.clamp(0.0, 100.0),
-            limits.available,
+            row1_val.clamp(0.0, 100.0),
+            row2_val.clamp(0.0, 100.0),
+            limits_available,
         )
     };
 
-    let peak_pct = ses_pct.max(wk_pct);
+    let peak_pct = r1_pct.max(r2_pct);
     let header_color = if available {
         theme.color_for_pct(peak_pct, Some(warn), Some(crit))
     } else {
@@ -100,6 +125,11 @@ fn render_dual_limit_tile(
 
     let label = tile.label.as_deref().unwrap_or(default_label);
     draw_text_5x7(&mut img, 5, 5, label, 1, header_color);
+
+    if let Some(badge) = page_badge {
+        let bw = (badge.len() as i32) * 4 - 1;
+        draw_text_3x5(&mut img, w - 12 - bw, 6, badge, 1, theme.phosphor_dim);
+    }
 
     // Top-right live status indicator dot
     let dot_col = if available {
@@ -110,14 +140,14 @@ fn render_dual_limit_tile(
     fill_rect(&mut img, w - 9, 7, 4, 4, dot_col);
     draw_hline(&mut img, 5, 14, w - 10, theme.grid_dim);
 
-    // Row 1: Session limit ("SES")
+    // Row 1
     draw_limit_row(
-        &mut img, w, 18, 28, "SES", ses_pct, available, warn, crit, theme,
+        &mut img, w, 18, 28, row1_tag, r1_pct, available, warn, crit, theme,
     );
 
-    // Row 2: Weekly limit ("WK")
+    // Row 2
     draw_limit_row(
-        &mut img, w, 44, 54, "WK", wk_pct, available, warn, crit, theme,
+        &mut img, w, 44, 54, row2_tag, r2_pct, available, warn, crit, theme,
     );
 
     img

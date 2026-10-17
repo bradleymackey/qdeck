@@ -15,7 +15,7 @@ pub use system::{
 };
 
 use crate::config::{ResolvedTheme, TileConfig};
-use crate::telemetry::AiProviderLimits;
+use crate::telemetry::{ClaudeLimits, GeminiLimits};
 use crate::xplane::A320FcuState;
 use image::RgbImage;
 
@@ -28,8 +28,8 @@ pub struct TelemetrySnapshot<'a> {
     pub mem_used_gb: f32,
     pub mem_total_gb: f32,
     pub swap_used_pct: f32,
-    pub claude_limits: AiProviderLimits,
-    pub gemini_limits: AiProviderLimits,
+    pub claude_limits: ClaudeLimits,
+    pub gemini_limits: GeminiLimits,
     pub active_mode: &'a str,
     pub next_mode: &'a str,
     pub mode_index: usize,
@@ -104,14 +104,17 @@ mod tests {
             mem_used_gb: 20.0,
             mem_total_gb: 32.0,
             swap_used_pct: 10.0,
-            claude_limits: AiProviderLimits {
+            claude_limits: ClaudeLimits {
                 session_pct: 5.0,
                 weekly_pct: 1.0,
                 available: true,
             },
-            gemini_limits: AiProviderLimits {
-                session_pct: 1.0,
-                weekly_pct: 58.0,
+            gemini_limits: GeminiLimits {
+                argon_pct: 66.0,
+                flash_pct: 2.0,
+                claude_pct: 0.0,
+                gpt_pct: 0.0,
+                view_index: 0,
                 available: true,
             },
             active_mode: "xplane",
