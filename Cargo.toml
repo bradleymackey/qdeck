@@ -10,39 +10,3 @@ serde = { version = "1.0", features = ["derive"] }
 streamdeck = "0.10.0"
 sysinfo = "0.39.6"
 toml = "0.8"
-
-# -----------------------------------------------------------------------------
-# QDeck Ops-Center Configuration
-# You can configure QDeck directly here in Cargo.toml or via a `qdeck.toml` file.
-# -----------------------------------------------------------------------------
-[package.metadata.qdeck]
-brightness = 85
-refresh_ms = 400
-vid = 0x0fd9
-# pid = 0x0080 # Stream Deck MK.2 (auto-detected if omitted)
-background_mode = "grid" # "grid" (tactical standby reticle) or "blank" (pure black)
-
-[package.metadata.qdeck.theme]
-background = "#000000"
-grid_dim = "#09260e"
-bar_track = "#061809"
-phosphor_green = "#00ff41"
-phosphor_dim = "#008f24"
-amber = "#ffb000"
-red = "#ff2a2a"
-warn_threshold = 60.0
-crit_threshold = 85.0
-
-[[package.metadata.qdeck.tiles]]
-position = "top-left"
-widget = "ops_status"
-label = "QDECK"
-
-[[package.metadata.qdeck.tiles]]
-position = "top-right"
-widget = "cpu"
-label = "CPU"
-warn_threshold = 60.0
-crit_threshold = 85.0
-
-

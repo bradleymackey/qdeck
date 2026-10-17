@@ -13,22 +13,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct CargoManifest {
-    pub package: Option<CargoPackage>,
-    pub qdeck: Option<QDeckConfig>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CargoPackage {
-    pub metadata: Option<CargoMetadata>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CargoMetadata {
-    pub qdeck: Option<QDeckConfig>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct QDeckConfig {
     /// Display brightness (0-100%)
@@ -164,83 +148,38 @@ impl QDeckConfig {
         })
     }
 
+    /// Loads configuration from `~/.config/qdeck/config.toml` (or an explicit `--config` path).
+    /// If `~/.config/qdeck/config.toml` does not exist yet, it is initialized once with
+    /// `DEFAULT_CONFIG_TOML`.
     pub fn load(custom_path: Option<&Path>) -> Result<(Self, PathBuf)> {
         if let Some(path) = custom_path {
             let cfg = Self::load_from_file(path)?;
             return Ok((cfg, path.to_path_buf()));
         }
 
-        if let Some(dir) = user_config_dir() {
-            let config_toml = dir.join("config.toml");
-            let qdeck_toml = dir.join("qdeck.toml");
-
-            if qdeck_toml.exists() && !config_toml.exists() {
-                let cfg = Self::load_from_file(&qdeck_toml)?;
-                return Ok((cfg, qdeck_toml));
+        let config_toml =
+            user_config_path().context("Could not determine ~/.config/qdeck/config.toml path")?;
+        if !config_toml.exists() {
+            if let Some(parent) = config_toml.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("Failed to create config directory {}", parent.display())
+                })?;
             }
-
-            if !config_toml.exists()
-                && let Err(e) = fs::create_dir_all(&dir)
-                    .and_then(|_| fs::write(&config_toml, DEFAULT_CONFIG_TOML))
-            {
-                eprintln!(
-                    "[QDECK] Note: Could not write default config to {}: {}",
-                    config_toml.display(),
-                    e
-                );
-            }
-
-            if config_toml.exists() {
-                let cfg = Self::load_from_file(&config_toml)?;
-                return Ok((cfg, config_toml));
-            }
+            fs::write(&config_toml, DEFAULT_CONFIG_TOML).with_context(|| {
+                format!(
+                    "Failed to initialize default config at {}",
+                    config_toml.display()
+                )
+            })?;
         }
 
-        let local_qdeck = PathBuf::from("qdeck.toml");
-        if local_qdeck.exists() {
-            let cfg = Self::load_from_file(&local_qdeck)?;
-            return Ok((cfg, local_qdeck));
-        }
-
-        let cargo_toml = PathBuf::from("Cargo.toml");
-        if cargo_toml.exists()
-            && let Ok(Some(cfg)) = Self::try_load_manifest(&cargo_toml)
-        {
-            return Ok((cfg, cargo_toml));
-        }
-
-        Ok((Self::builtin_default(), PathBuf::from("built-in defaults")))
-    }
-
-    fn try_load_manifest(path: &Path) -> Result<Option<Self>> {
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
-        let manifest: CargoManifest = toml::from_str(&raw)
-            .with_context(|| format!("Failed to parse TOML in {}", path.display()))?;
-
-        if let Some(pkg) = manifest.package
-            && let Some(meta) = pkg.metadata
-            && let Some(qdeck) = meta.qdeck
-        {
-            return Ok(Some(qdeck));
-        }
-        if let Some(qdeck) = manifest.qdeck {
-            return Ok(Some(qdeck));
-        }
-        Ok(None)
+        let cfg = Self::load_from_file(&config_toml)?;
+        Ok((cfg, config_toml))
     }
 
     pub fn load_from_file(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        if let Ok(cfg) = toml::from_str::<QDeckConfig>(&raw)
-            && (!cfg.tiles.is_empty() || raw.contains("tiles") || raw.contains("[theme]"))
-        {
-            return Ok(cfg);
-        }
-        if let Ok(Some(cfg)) = Self::try_load_manifest(path) {
-            return Ok(cfg);
-        }
         let cfg: QDeckConfig = toml::from_str(&raw)
             .with_context(|| format!("Failed to parse QDeckConfig from {}", path.display()))?;
         Ok(cfg)
@@ -256,6 +195,10 @@ pub fn user_config_dir() -> Option<PathBuf> {
     env::var("HOME")
         .ok()
         .map(|home| PathBuf::from(home).join(".config").join("qdeck"))
+}
+
+pub fn user_config_path() -> Option<PathBuf> {
+    user_config_dir().map(|dir| dir.join("config.toml"))
 }
 
 #[cfg(test)]

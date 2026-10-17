@@ -49,7 +49,6 @@ qdeck/
 ├── .cargo/config.toml        # Build target directory configuration (build/)
 ├── .github/workflows/ci.yml  # GitHub Actions CI (fmt, clippy, build, test)
 ├── Cargo.toml                # Package manifest (lib + bin crate)
-├── config.example.toml       # Example multi-page & 4-panel Airbus configuration
 ├── AGENTS.md                 # Project rules and conventions for AI coding agents
 ├── src/
 │   ├── lib.rs                # Library crate root exporting modules
@@ -59,18 +58,18 @@ qdeck/
 │   ├── macos.rs              # CoreGraphics screen-lock / display-sleep detection
 │   ├── telemetry.rs          # macOS CPU, RAM, GPU, Network, Disk, Battery collectors
 │   ├── config/
-│   │   ├── mod.rs            # Config loader, path resolution, sub-panel tile overlay
-│   │   ├── defaults.rs       # Default TOML config generator
+│   │   ├── mod.rs            # Config loader (~/.config/qdeck/config.toml) & tile lookup
+│   │   ├── defaults.rs       # Initial default config template for ~/.config/qdeck/config.toml
 │   │   ├── theme.rs          # Hex color parsing and ResolvedTheme palette
-│   │   └── tile.rs           # PageConfig, TileConfig, and sub-panel schema
+│   │   └── tile.rs           # TileConfig and mode/sub-panel matching
 │   ├── widgets/
 │   │   ├── mod.rs            # Tile dispatcher (system, navigation, Airbus controls)
 │   │   ├── airbus.rs         # Airbus FCU, Korry switches, gear, flaps, speedbrakes
 │   │   ├── icons.rs          # Cockpit vector icons (arrows, brake, fan, spoiler, notches)
-│   │   ├── navigation.rs     # Page folder, back button, and sub-panel switcher tiles
+│   │   ├── navigation.rs     # Mode selector and sub-panel switcher tiles
 │   │   └── system.rs         # System telemetry tiles & sparklines
 │   └── xplane/
-│       ├── mod.rs            # XPlaneClient combining UDP socket + WebAPI background thread
+│       ├── mod.rs            # XPlaneClient combining UDP socket + WebAPI polling
 │       ├── state.rs          # A320FcuState, dataref tables, edge-triggered state updates
 │       ├── commands.rs       # Multi-aircraft command dispatch (Laminar A333, ToLiss, sim/*)
 │       └── webapi.rs         # X-Plane 12 Local WebAPI HTTP v2 client (port 8086)
@@ -95,16 +94,16 @@ cargo test
 cargo build --release
 ```
 
-### Run Options
+### Configuration (`~/.config/qdeck/config.toml`)
+`qdeck` is configured purely via **`~/.config/qdeck/config.toml`** (created automatically from [`src/config/defaults.rs`](src/config/defaults.rs) on first run if missing, and hot-reloaded whenever saved).
+
 ```bash
-# Run normally (loads ~/.config/qdeck/config.toml, creating it if missing)
+# Run normally (loads ~/.config/qdeck/config.toml)
 ./build/release/qdeck
 
-# Write default config to ~/.config/qdeck/config.toml and exit
-./build/release/qdeck --init-config
-
-# Run with a custom config file path
-./build/release/qdeck --config ./config.example.toml
+# Install or uninstall the macOS launchd background service
+./build/release/qdeck --install-service
+./build/release/qdeck --uninstall-service
 ```
 
 ### Background Service (`launchd`)

@@ -62,9 +62,10 @@ This file documents the architectural conventions, hardware rules, cockpit desig
 
 ## 4. Configuration, Testing & Deployment Workflow
 
-- **Keep Config Files in Sync**:
-  - Default configuration is defined in [`src/config/defaults.rs`](src/config/defaults.rs) and mirrored in [`config.example.toml`](config.example.toml) and the user's live [`~/.config/qdeck/config.toml`](file:///Users/bradley/.config/qdeck/config.toml).
-  - Whenever default tiles or panels are added or modified, update all three locations.
+- **User-Driven Configuration in `~/.config/qdeck/config.toml` Only**:
+  - Do **not** store application configuration in `Cargo.toml` (`[package.metadata.qdeck]`) or repo-local `.toml` files.
+  - Runtime configuration is driven purely by **`~/.config/qdeck/config.toml`** (hot-reloaded automatically on change, and bootstrapped on first run from [`src/config/defaults.rs`](src/config/defaults.rs) if missing).
+  - When adding new default tiles or panels, update both [`src/config/defaults.rs`](src/config/defaults.rs) and the user's [`~/.config/qdeck/config.toml`](file:///Users/bradley/.config/qdeck/config.toml).
 - **Build & Test Before Deploying**:
   - Build artifacts are written to `./build/` (configured in [`.cargo/config.toml`](.cargo/config.toml)).
   - Always run `cargo test` (unit + integration tests in [`tests/integration_test.rs`](tests/integration_test.rs)) and `cargo clippy --all-targets` before building the release binary (`cargo build --release`).
