@@ -113,13 +113,12 @@ impl QDeckConfig {
         let active_norm = active_mode.trim().to_ascii_lowercase();
         let mut out: Vec<String> = Vec::new();
         for tile in &self.tiles {
-            if tile.matches_mode(&active_norm, false) {
-                if let Some(p) = &tile.panel {
-                    let clean = p.trim().to_ascii_lowercase();
-                    if !clean.is_empty() && clean != "*" && clean != "all" && !out.contains(&clean)
-                    {
-                        out.push(clean);
-                    }
+            if tile.matches_mode(&active_norm, false)
+                && let Some(p) = &tile.panel
+            {
+                let clean = p.trim().to_ascii_lowercase();
+                if !clean.is_empty() && clean != "*" && clean != "all" && !out.contains(&clean) {
+                    out.push(clean);
                 }
             }
         }
@@ -180,16 +179,15 @@ impl QDeckConfig {
                 return Ok((cfg, qdeck_toml));
             }
 
-            if !config_toml.exists() {
-                if let Err(e) = fs::create_dir_all(&dir)
+            if !config_toml.exists()
+                && let Err(e) = fs::create_dir_all(&dir)
                     .and_then(|_| fs::write(&config_toml, DEFAULT_CONFIG_TOML))
-                {
-                    eprintln!(
-                        "[QDECK] Note: Could not write default config to {}: {}",
-                        config_toml.display(),
-                        e
-                    );
-                }
+            {
+                eprintln!(
+                    "[QDECK] Note: Could not write default config to {}: {}",
+                    config_toml.display(),
+                    e
+                );
             }
 
             if config_toml.exists() {
@@ -205,27 +203,26 @@ impl QDeckConfig {
         }
 
         let cargo_toml = PathBuf::from("Cargo.toml");
-        if cargo_toml.exists() {
-            if let Ok(Some(cfg)) = Self::try_load_manifest(&cargo_toml) {
-                return Ok((cfg, cargo_toml));
-            }
+        if cargo_toml.exists()
+            && let Ok(Some(cfg)) = Self::try_load_manifest(&cargo_toml)
+        {
+            return Ok((cfg, cargo_toml));
         }
 
         Ok((Self::builtin_default(), PathBuf::from("built-in defaults")))
     }
 
     fn try_load_manifest(path: &Path) -> Result<Option<Self>> {
-        let raw =
-            fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+        let raw = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
         let manifest: CargoManifest = toml::from_str(&raw)
             .with_context(|| format!("Failed to parse TOML in {}", path.display()))?;
 
-        if let Some(pkg) = manifest.package {
-            if let Some(meta) = pkg.metadata {
-                if let Some(qdeck) = meta.qdeck {
-                    return Ok(Some(qdeck));
-                }
-            }
+        if let Some(pkg) = manifest.package
+            && let Some(meta) = pkg.metadata
+            && let Some(qdeck) = meta.qdeck
+        {
+            return Ok(Some(qdeck));
         }
         if let Some(qdeck) = manifest.qdeck {
             return Ok(Some(qdeck));
@@ -234,12 +231,12 @@ impl QDeckConfig {
     }
 
     pub fn load_from_file(path: &Path) -> Result<Self> {
-        let raw =
-            fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
-        if let Ok(cfg) = toml::from_str::<QDeckConfig>(&raw) {
-            if !cfg.tiles.is_empty() || raw.contains("tiles") || raw.contains("[theme]") {
-                return Ok(cfg);
-            }
+        let raw = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        if let Ok(cfg) = toml::from_str::<QDeckConfig>(&raw)
+            && (!cfg.tiles.is_empty() || raw.contains("tiles") || raw.contains("[theme]"))
+        {
+            return Ok(cfg);
         }
         if let Ok(Some(cfg)) = Self::try_load_manifest(path) {
             return Ok(cfg);
@@ -251,10 +248,10 @@ impl QDeckConfig {
 }
 
 pub fn user_config_dir() -> Option<PathBuf> {
-    if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
-        if !xdg.trim().is_empty() {
-            return Some(PathBuf::from(xdg).join("qdeck"));
-        }
+    if let Ok(xdg) = env::var("XDG_CONFIG_HOME")
+        && !xdg.trim().is_empty()
+    {
+        return Some(PathBuf::from(xdg).join("qdeck"));
     }
     env::var("HOME")
         .ok()

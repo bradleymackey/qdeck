@@ -54,10 +54,10 @@ impl XPlaneClient {
 
     /// Performs a fast loopback HTTP request to X-Plane 12's Local WebAPI (`127.0.0.1:8086`).
     fn web_api_request(&mut self, method: &str, path: &str, body: Option<&str>) -> Option<String> {
-        if let Some(until) = self.web_api_backoff_until {
-            if Instant::now() < until {
-                return None;
-            }
+        if let Some(until) = self.web_api_backoff_until
+            && Instant::now() < until
+        {
+            return None;
         }
 
         let addr = SocketAddr::from(WEB_API_ADDR);
@@ -199,17 +199,20 @@ impl XPlaneClient {
             let list = datarefs_for_panel(active_panel);
             for &(key_id, dref_name) in list {
                 let Some(web_id) = self.resolve_web_dref_id(dref_name) else {
-                    if self.web_api_backoff_until.is_some_and(|u| Instant::now() < u) {
+                    if self
+                        .web_api_backoff_until
+                        .is_some_and(|u| Instant::now() < u)
+                    {
                         break;
                     }
                     continue;
                 };
                 let path = format!("/api/v2/datarefs/{web_id}/value");
-                if let Some(body) = self.web_api_request("GET", &path, None) {
-                    if let Some(val) = extract_json_f32_data(&body) {
-                        self.state.last_rx = Some(Instant::now());
-                        apply_dref_update(&mut self.state, &mut self.prev_dref_vals, key_id, val);
-                    }
+                if let Some(body) = self.web_api_request("GET", &path, None)
+                    && let Some(val) = extract_json_f32_data(&body)
+                {
+                    self.state.last_rx = Some(Instant::now());
+                    apply_dref_update(&mut self.state, &mut self.prev_dref_vals, key_id, val);
                 }
             }
         }

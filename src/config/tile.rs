@@ -122,18 +122,20 @@ impl TileConfig {
                 custom_cmd: self.xplane_cmd.clone(),
             };
         }
-        if let Some(cmd) = &self.on_click {
-            if !cmd.trim().is_empty() {
-                return ClickAction::ShellCommand(cmd.clone());
-            }
+        if let Some(cmd) = &self.on_click
+            && !cmd.trim().is_empty()
+        {
+            return ClickAction::ShellCommand(cmd.clone());
         }
-        if let Some(app) = &self.app {
-            if !app.trim().is_empty() {
-                return ClickAction::OpenApp(app.clone());
-            }
+        if let Some(app) = &self.app
+            && !app.trim().is_empty()
+        {
+            return ClickAction::OpenApp(app.clone());
         }
         match self.tile_type.trim().to_ascii_lowercase().as_str() {
-            "cpu" | "gpu" | "memory" | "ram" => ClickAction::OpenApp("Activity Monitor".to_string()),
+            "cpu" | "gpu" | "memory" | "ram" => {
+                ClickAction::OpenApp("Activity Monitor".to_string())
+            }
             "ops_status" | "status" => ClickAction::TriggerDemoSpike,
             _ => ClickAction::None,
         }
@@ -141,7 +143,7 @@ impl TileConfig {
 
     /// Resolves this tile's configuration to a 0-based key index given the deck layout (columns, total keys)
     pub fn resolve_key(&self, cols: u8, total_keys: u8) -> Option<u8> {
-        let rows = if cols > 0 { total_keys / cols } else { 3 };
+        let rows = total_keys.checked_div(cols).unwrap_or(3);
         if let Some(k) = self.key {
             return (k < total_keys).then_some(k);
         }
@@ -155,12 +157,19 @@ impl TileConfig {
         if let Some(pos) = &self.position {
             let normalized = pos.trim().to_ascii_lowercase().replace('_', "-");
             if let Some((r_str, c_str)) = normalized.split_once(',') {
-                let r_clean = r_str.trim().trim_start_matches("row:").trim_start_matches('r');
-                let c_clean = c_str.trim().trim_start_matches("col:").trim_start_matches('c');
-                if let (Ok(r), Ok(c)) = (r_clean.parse::<u8>(), c_clean.parse::<u8>()) {
-                    if r < rows && c < cols {
-                        return Some(r * cols + c);
-                    }
+                let r_clean = r_str
+                    .trim()
+                    .trim_start_matches("row:")
+                    .trim_start_matches('r');
+                let c_clean = c_str
+                    .trim()
+                    .trim_start_matches("col:")
+                    .trim_start_matches('c');
+                if let (Ok(r), Ok(c)) = (r_clean.parse::<u8>(), c_clean.parse::<u8>())
+                    && r < rows
+                    && c < cols
+                {
+                    return Some(r * cols + c);
                 }
             }
             let k = match normalized.as_str() {
@@ -218,11 +227,23 @@ mod tests {
     #[test]
     fn test_resolve_key_mk2_grid() {
         // Stream Deck MK.2 has 5 columns x 3 rows = 15 keys (indices 0..14)
-        assert_eq!(dummy_tile(Some("top-left"), "mode").resolve_key(5, 15), Some(0));
-        assert_eq!(dummy_tile(Some("top-right"), "cpu").resolve_key(5, 15), Some(4));
+        assert_eq!(
+            dummy_tile(Some("top-left"), "mode").resolve_key(5, 15),
+            Some(0)
+        );
+        assert_eq!(
+            dummy_tile(Some("top-right"), "cpu").resolve_key(5, 15),
+            Some(4)
+        );
         assert_eq!(dummy_tile(Some("0,3"), "gpu").resolve_key(5, 15), Some(3));
-        assert_eq!(dummy_tile(Some("1,2"), "a320_fcu").resolve_key(5, 15), Some(7));
-        assert_eq!(dummy_tile(Some("bottom-right"), "a320_fcu").resolve_key(5, 15), Some(14));
+        assert_eq!(
+            dummy_tile(Some("1,2"), "a320_fcu").resolve_key(5, 15),
+            Some(7)
+        );
+        assert_eq!(
+            dummy_tile(Some("bottom-right"), "a320_fcu").resolve_key(5, 15),
+            Some(14)
+        );
         assert_eq!(dummy_tile(Some("5,5"), "a320_fcu").resolve_key(5, 15), None);
     }
 

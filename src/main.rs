@@ -104,9 +104,7 @@ fn main() -> Result<()> {
                         if is_shutdown_requested() {
                             break;
                         }
-                        eprintln!(
-                            "[QDECK] Stream Deck disconnected ({e}). Reconnecting in 2s..."
-                        );
+                        eprintln!("[QDECK] Stream Deck disconnected ({e}). Reconnecting in 2s...");
                         thread::sleep(Duration::from_secs(2));
                     }
                 }

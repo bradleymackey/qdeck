@@ -10,13 +10,13 @@ pub fn dispatch_control<F>(
 ) where
     F: FnMut(&str),
 {
-    if let Some(cmd) = custom_cmd {
-        if !cmd.trim().is_empty() {
-            for single in cmd.split(';') {
-                let trimmed = single.trim();
-                if !trimmed.is_empty() {
-                    send_cmd(trimmed);
-                }
+    if let Some(cmd) = custom_cmd
+        && !cmd.trim().is_empty()
+    {
+        for single in cmd.split(';') {
+            let trimmed = single.trim();
+            if !trimmed.is_empty() {
+                send_cmd(trimmed);
             }
         }
     }
@@ -306,6 +306,11 @@ where
             true
         }
         "park_brake" | "parking_brake" => {
+            if state.park_brake_on {
+                send_cmd("laminar/A333/switch/parking_brake_left");
+            } else {
+                send_cmd("laminar/A333/switch/parking_brake_right");
+            }
             send_cmd("sim/flight_controls/brakes_toggle_max");
             state.park_brake_on = !state.park_brake_on;
             true

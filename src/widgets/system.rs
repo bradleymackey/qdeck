@@ -214,7 +214,10 @@ pub fn render_memory_tile(
     draw_hline(&mut img, 4, 13, w - 8, theme.grid_dim);
 
     draw_text_3x5(&mut img, 6, 18, "RAM", 1, theme.phosphor_dim);
-    let gb_str = format!("{:.0}/{:.0}G", telemetry.mem_used_gb, telemetry.mem_total_gb);
+    let gb_str = format!(
+        "{:.0}/{:.0}G",
+        telemetry.mem_used_gb, telemetry.mem_total_gb
+    );
     let gb_w = (gb_str.len() as i32) * 4 - 1;
     draw_text_3x5(&mut img, w - 6 - gb_w, 18, &gb_str, 1, mem_color);
 
@@ -229,11 +232,7 @@ pub fn render_memory_tile(
         if sx + seg_w <= bar_x + bar_w {
             let col = if s < active_segs {
                 let seg_pct = ((s + 1) as f32 / segs as f32) * 100.0;
-                theme.color_for_pct(
-                    seg_pct.min(telemetry.mem_used_pct),
-                    Some(warn),
-                    Some(crit),
-                )
+                theme.color_for_pct(seg_pct.min(telemetry.mem_used_pct), Some(warn), Some(crit))
             } else {
                 theme.bar_track
             };
@@ -323,7 +322,7 @@ pub fn render_ops_status_tile(
         },
     );
 
-    let pulse_on = telemetry.tick % 2 == 0;
+    let pulse_on = telemetry.tick.is_multiple_of(2);
     let pulse_col = if is_highlighted {
         theme.background
     } else if pulse_on {

@@ -187,7 +187,10 @@ pub const UDP_RREF_SUBSCRIPTIONS: &[(i32, &str)] = &[
         "sim/cockpit2/autopilot/heading_dial_deg_mag_pilot",
     ),
     (DREF_SIM_ALT, "sim/cockpit2/autopilot/altitude_dial_ft"),
-    (DREF_SIM_SPD, "sim/cockpit2/autopilot/airspeed_dial_kts_mach"),
+    (
+        DREF_SIM_SPD,
+        "sim/cockpit2/autopilot/airspeed_dial_kts_mach",
+    ),
     (DREF_SIM_VS, "sim/cockpit2/autopilot/vvi_dial_fpm"),
     (DREF_SIM_WARN, "sim/cockpit2/annunciators/master_warning"),
     (DREF_SIM_CAUT, "sim/cockpit2/annunciators/master_caution"),
@@ -216,7 +219,10 @@ pub const FCU_PANEL_DATAREFS: &[(i32, &str)] = &[
         "sim/cockpit2/autopilot/heading_dial_deg_mag_pilot",
     ),
     (DREF_SIM_ALT, "sim/cockpit2/autopilot/altitude_dial_ft"),
-    (DREF_SIM_SPD, "sim/cockpit2/autopilot/airspeed_dial_kts_mach"),
+    (
+        DREF_SIM_SPD,
+        "sim/cockpit2/autopilot/airspeed_dial_kts_mach",
+    ),
     (DREF_SIM_VS, "sim/cockpit2/autopilot/vvi_dial_fpm"),
     (DREF_SIM_TRK, "sim/cockpit2/autopilot/trk_fpa"),
     (DREF_SIM_WARN, "sim/cockpit2/annunciators/master_warning"),
@@ -322,8 +328,8 @@ pub fn apply_dref_update(
         // Panel 3 (Gear, Brakes, Flaps, Speedbrakes)
         DREF_GEAR_HANDLE if changed => state.gear_down = val > 0.5,
         DREF_PARK_BRAKE if changed => state.park_brake_on = val > 0.5,
-        DREF_FLAP_RATIO => state.flap_ratio = val.clamp(0.0, 1.0),
-        DREF_SPDBRK_RATIO => state.spdbrk_ratio = val.clamp(-0.5, 1.0),
+        DREF_FLAP_RATIO if changed => state.flap_ratio = val.clamp(0.0, 1.0),
+        DREF_SPDBRK_RATIO if changed => state.spdbrk_ratio = val.clamp(-0.5, 1.0),
         DREF_BRAKE_FAN if changed => state.brake_fan_on = val > 0.1,
         // Panel 4 (Lights, Anti-Ice, ADIRS, Seatbelts, Baro STD)
         DREF_STROBE if changed => state.strobe_on = val > 0.5,

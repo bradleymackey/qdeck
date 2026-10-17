@@ -415,10 +415,7 @@ pub fn run_deck_session(
                                     if let Err(e) =
                                         Command::new("/bin/sh").arg("-c").arg(&cmd).spawn()
                                     {
-                                        eprintln!(
-                                            "[QDECK] Failed to run command '{}': {}",
-                                            cmd, e
-                                        );
+                                        eprintln!("[QDECK] Failed to run command '{}': {}", cmd, e);
                                     }
                                 }
                                 ClickAction::TriggerDemoSpike => {
@@ -449,11 +446,11 @@ pub fn run_deck_session(
         let now = Instant::now();
         let mut expired_highlight_keys: Vec<u8> = Vec::new();
         for (k_idx, slot) in highlight_until.iter_mut().enumerate() {
-            if let Some(deadline) = *slot {
-                if now >= deadline {
-                    *slot = None;
-                    expired_highlight_keys.push(k_idx as u8);
-                }
+            if let Some(deadline) = *slot
+                && now >= deadline
+            {
+                *slot = None;
+                expired_highlight_keys.push(k_idx as u8);
             }
         }
 
@@ -533,17 +530,16 @@ pub fn run_deck_session(
                 for k in 0..total_keys {
                     if let Some(t) =
                         cfg.tile_for_key(k, cols, total_keys, active_mode, active_panel)
+                        && t.is_a320_fcu()
                     {
-                        if t.is_a320_fcu() {
-                            let is_hi = highlight_until
-                                .get(k as usize)
-                                .and_then(|&d| d)
-                                .is_some_and(|deadline| Instant::now() < deadline);
-                            render_key_to_deck(
-                                &mut deck, cfg, theme, cols, total_keys, img_w, img_h, k,
-                                &snapshot, is_hi,
-                            )?;
-                        }
+                        let is_hi = highlight_until
+                            .get(k as usize)
+                            .and_then(|&d| d)
+                            .is_some_and(|deadline| Instant::now() < deadline);
+                        render_key_to_deck(
+                            &mut deck, cfg, theme, cols, total_keys, img_w, img_h, k, &snapshot,
+                            is_hi,
+                        )?;
                     }
                 }
             } else {
@@ -557,8 +553,7 @@ pub fn run_deck_session(
 
             for key_u8 in expired_highlight_keys {
                 render_key_to_deck(
-                    &mut deck, cfg, theme, cols, total_keys, img_w, img_h, key_u8, &snapshot,
-                    false,
+                    &mut deck, cfg, theme, cols, total_keys, img_w, img_h, key_u8, &snapshot, false,
                 )?;
             }
         }
@@ -578,10 +573,7 @@ pub fn run_deck_session(
                         xplane.set_target_addr(&cfg.xplane_addr);
                         *theme = cfg.theme.resolve();
                         *modes = cfg.effective_modes();
-                        *mode_idx = modes
-                            .iter()
-                            .position(|m| m == &prev_mode_name)
-                            .unwrap_or(0);
+                        *mode_idx = modes.iter().position(|m| m == &prev_mode_name).unwrap_or(0);
                         let total_modes = modes.len().max(1);
                         let active_mode = &modes[*mode_idx];
                         let next_mode = &modes[(*mode_idx + 1) % total_modes];
@@ -683,27 +675,25 @@ pub fn run_deck_session(
 
             for k in 0..total_keys {
                 if let Some(tile) = cfg.tile_for_key(k, cols, total_keys, active_mode, active_panel)
+                    && is_dynamic_telemetry_tile(&tile.tile_type)
                 {
-                    if is_dynamic_telemetry_tile(&tile.tile_type) {
-                        let is_hi = highlight_until
-                            .get(k as usize)
-                            .and_then(|&d| d)
-                            .is_some_and(|deadline| Instant::now() < deadline);
-                        render_key_to_deck(
-                            &mut deck, cfg, theme, cols, total_keys, img_w, img_h, k, &snapshot,
-                            is_hi,
-                        )?;
-                    }
+                    let is_hi = highlight_until
+                        .get(k as usize)
+                        .and_then(|&d| d)
+                        .is_some_and(|deadline| Instant::now() < deadline);
+                    render_key_to_deck(
+                        &mut deck, cfg, theme, cols, total_keys, img_w, img_h, k, &snapshot, is_hi,
+                    )?;
                 }
             }
 
             last_render = Instant::now();
             *tick += 1;
-            if let Some(max) = max_frames {
-                if *tick >= max {
-                    blank_and_sleep_deck(&mut deck, total_keys);
-                    return Ok(true);
-                }
+            if let Some(max) = max_frames
+                && *tick >= max
+            {
+                blank_and_sleep_deck(&mut deck, total_keys);
+                return Ok(true);
             }
         }
     }

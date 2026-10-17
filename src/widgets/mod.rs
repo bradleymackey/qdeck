@@ -110,10 +110,7 @@ mod tests {
             let img = render_tile_image(72, 72, (idx % 15) as u8, tile, &theme, &snap, false);
             assert_eq!(img.width(), 72);
             assert_eq!(img.height(), 72);
-            let non_black_pixels = img
-                .pixels()
-                .filter(|p| p.0 != [0, 0, 0])
-                .count();
+            let non_black_pixels = img.pixels().filter(|p| p.0 != [0, 0, 0]).count();
             assert!(
                 non_black_pixels > 20,
                 "Tile {:?} rendered fewer than 20 lit pixels",

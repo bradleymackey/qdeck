@@ -10,12 +10,11 @@ pub fn parse_ioreg_gpu_output(text: &str, fallback_cores: usize) -> (usize, f32)
 
     for line in text.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("\"gpu-core-count\" =") {
-            if let Ok(c) = rest.trim().parse::<usize>() {
-                if c > 0 {
-                    gpu_cores = c;
-                }
-            }
+        if let Some(rest) = trimmed.strip_prefix("\"gpu-core-count\" =")
+            && let Ok(c) = rest.trim().parse::<usize>()
+            && c > 0
+        {
+            gpu_cores = c;
         }
         if trimmed.starts_with("\"PerformanceStatistics\"") {
             for key in [

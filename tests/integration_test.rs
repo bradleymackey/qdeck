@@ -49,8 +49,7 @@ fn test_full_deck_matrix_across_all_modes_and_panels() {
                         tick: 4,
                         demo_mode_active: false,
                     };
-                    let normal_img =
-                        render_tile_image(72, 72, key_idx, tile, &theme, &snap, false);
+                    let normal_img = render_tile_image(72, 72, key_idx, tile, &theme, &snap, false);
                     let hi_img = render_tile_image(72, 72, key_idx, tile, &theme, &snap, true);
                     assert_eq!(normal_img.dimensions(), (72, 72));
                     assert_eq!(hi_img.dimensions(), (72, 72));

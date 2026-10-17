@@ -31,7 +31,11 @@ pub fn render_mode_tile(
     let label = tile.label.as_deref().unwrap_or("MODE");
     draw_text_5x7(&mut img, 5, 5, label, 1, theme.phosphor_dim);
 
-    let idx_text = format!("{}/{}", telemetry.mode_index + 1, telemetry.total_modes.max(1));
+    let idx_text = format!(
+        "{}/{}",
+        telemetry.mode_index + 1,
+        telemetry.total_modes.max(1)
+    );
     let idx_w = (idx_text.len() as i32) * 4 - 1;
     draw_text_3x5(&mut img, w - 5 - idx_w, 6, &idx_text, 1, theme.phosphor_dim);
 
@@ -51,7 +55,14 @@ pub fn render_mode_tile(
     if mode_upper.len() <= 10 {
         let tw = text_width_5x7(&mode_upper, 1);
         let tx = ((w - tw) / 2).max(6);
-        draw_text_5x7(&mut img, tx, box_y + 8, &mode_upper, 1, theme.phosphor_green);
+        draw_text_5x7(
+            &mut img,
+            tx,
+            box_y + 8,
+            &mode_upper,
+            1,
+            theme.phosphor_green,
+        );
     } else {
         let clipped: String = mode_upper.chars().take(14).collect();
         let tw = (clipped.len() as i32) * 4 - 1;

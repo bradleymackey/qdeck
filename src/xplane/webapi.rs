@@ -63,8 +63,11 @@ mod tests {
         assert!(get_req.starts_with("GET /api/v2/datarefs/10/value HTTP/1.1\r\n"));
         assert!(get_req.ends_with("\r\n\r\n"));
 
-        let post_req =
-            format_http_request("POST", "/api/v2/command/42/activate", Some("{\"duration\":0}"));
+        let post_req = format_http_request(
+            "POST",
+            "/api/v2/command/42/activate",
+            Some("{\"duration\":0}"),
+        );
         assert!(post_req.contains("Content-Length: 14\r\n"));
         assert!(post_req.ends_with("\r\n\r\n{\"duration\":0}"));
     }
