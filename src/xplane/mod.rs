@@ -5,12 +5,17 @@ pub mod webapi;
 pub use state::A320FcuState;
 
 use commands::dispatch_control;
-use state::{UDP_RREF_SUBSCRIPTIONS, apply_dref_update, datarefs_for_panel};
+use state::{
+    DREF_GEAR_DEPLOY, UDP_RREF_SUBSCRIPTIONS, apply_dref_array_update, apply_dref_update,
+    datarefs_for_panel,
+};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::time::{Duration, Instant};
-use webapi::{extract_json_f32_data, extract_json_u64_id, format_http_request};
+use webapi::{
+    extract_json_f32_array, extract_json_f32_data, extract_json_u64_id, format_http_request,
+};
 
 const WEB_API_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 8086);
 
@@ -208,11 +213,16 @@ impl XPlaneClient {
                     continue;
                 };
                 let path = format!("/api/v2/datarefs/{web_id}/value");
-                if let Some(body) = self.web_api_request("GET", &path, None)
-                    && let Some(val) = extract_json_f32_data(&body)
-                {
-                    self.state.last_rx = Some(Instant::now());
-                    apply_dref_update(&mut self.state, &mut self.prev_dref_vals, key_id, val);
+                if let Some(body) = self.web_api_request("GET", &path, None) {
+                    if key_id == DREF_GEAR_DEPLOY {
+                        if let Some(vals) = extract_json_f32_array(&body) {
+                            self.state.last_rx = Some(Instant::now());
+                            apply_dref_array_update(&mut self.state, key_id, &vals);
+                        }
+                    } else if let Some(val) = extract_json_f32_data(&body) {
+                        self.state.last_rx = Some(Instant::now());
+                        apply_dref_update(&mut self.state, &mut self.prev_dref_vals, key_id, val);
+                    }
                 }
             }
         }

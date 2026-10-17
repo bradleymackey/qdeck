@@ -290,7 +290,8 @@ fn render_eng_mode_selector(
     draw_text_3x5(img, (w - sw) / 2, h - 13, sub_str, 1, theme.phosphor_dim);
 }
 
-/// Airbus Center Instrument Panel 3-Triangle Landing Gear Indicator (`LDG GEAR`) with Up/Down arrows.
+/// Airbus Center Instrument Panel 3-Triangle Landing Gear Indicator (`LDG GEAR`)
+/// showing actual Left Main (`[1]`), Nose (`[0]`), and Right Main (`[2]`) gear states.
 fn render_landing_gear(
     img: &mut RgbImage,
     w: i32,
@@ -298,7 +299,11 @@ fn render_landing_gear(
     fcu: &A320FcuState,
     theme: &ResolvedTheme,
 ) {
-    let border_col = if fcu.gear_down {
+    let in_transit = fcu.is_gear_in_transit();
+    let all_down = fcu.gear_down;
+    let border_col = if in_transit {
+        theme.red
+    } else if all_down {
         scale_color(theme.phosphor_green, 0.65)
     } else {
         theme.grid_dim
@@ -306,30 +311,56 @@ fn render_landing_gear(
     draw_rect_border(img, 4, 4, w - 8, h - 8, 1, border_col);
     draw_hline(img, 5, 35, w - 10, theme.grid_dim);
 
-    if fcu.gear_down {
-        // 3 green locked-down triangles in nose + main gear formation
-        let tri_col = theme.phosphor_green;
-        draw_triangle_down(img, 20, 14, 6, tri_col);
-        draw_triangle_down(img, w / 2, 10, 6, tri_col);
-        draw_triangle_down(img, w - 20, 14, 6, tri_col);
-        draw_text_3x5(img, (w - 19) / 2, 25, "DOWN", 1, theme.phosphor_green);
-    } else {
-        // 3 upward retracted triangles + UP
-        let up_col = scale_color(theme.phosphor_dim, 0.70);
-        draw_triangle_up(img, 20, 12, 5, up_col);
-        draw_triangle_up(img, w / 2, 9, 5, up_col);
-        draw_triangle_up(img, w - 20, 12, 5, up_col);
-        draw_text_3x5(img, (w - 7) / 2, 24, "UP", 1, up_col);
+    // Draw each of the 3 struts: Left Main [1], Nose [0], Right Main [2]
+    let struts = [
+        (20, 14, fcu.gear_deploy[1]),
+        (w / 2, 10, fcu.gear_deploy[0]),
+        (w - 20, 14, fcu.gear_deploy[2]),
+    ];
+    for &(cx, ty, ratio) in &struts {
+        if ratio >= 0.98 {
+            // Locked down: bright green downward triangle
+            draw_triangle_down(img, cx, ty, 6, theme.phosphor_green);
+        } else if ratio > 0.02 {
+            // Unlocked / in transit: red downward triangle (Airbus UNLK light)
+            draw_triangle_down(img, cx, ty, 6, theme.red);
+        } else {
+            // Fully retracted up: dim upward triangle
+            draw_triangle_up(img, cx, ty - 2, 5, scale_color(theme.phosphor_dim, 0.70));
+        }
     }
 
-    let leg_col = if fcu.gear_down {
+    if in_transit {
+        draw_text_3x5(img, (w - 15) / 2, 25, "UNLK", 1, theme.red);
+    } else if all_down {
+        draw_text_3x5(img, (w - 15) / 2, 25, "DOWN", 1, theme.phosphor_green);
+    } else {
+        draw_text_3x5(
+            img,
+            (w - 7) / 2,
+            24,
+            "UP",
+            1,
+            scale_color(theme.phosphor_dim, 0.70),
+        );
+    }
+
+    let leg_col = if in_transit {
+        theme.amber
+    } else if all_down {
         theme.phosphor_green
     } else {
         theme.phosphor_dim
     };
     draw_text_5x7(img, 12, 46, "GEAR", 1, leg_col);
-    if fcu.gear_down {
+    if all_down {
         draw_arrow_down(img, 48, 43, 12, 4, theme.phosphor_green);
+    } else if in_transit {
+        if fcu.gear_handle_down {
+            draw_arrow_down(img, 48, 43, 12, 4, theme.amber);
+        } else {
+            draw_arrow_up(img, 48, 43, 12, 4, theme.amber);
+        }
     } else {
         draw_arrow_up(img, 48, 43, 12, 4, theme.phosphor_dim);
     }

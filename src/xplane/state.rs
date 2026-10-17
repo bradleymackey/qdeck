@@ -40,7 +40,12 @@ pub struct A320FcuState {
     pub ecam_page: &'static str,
 
     // Panel 3: Gear, Autobrake, Flaps, Spoilers & Flight Controls
+    /// True when all 3 landing gear struts are down and locked (`>= 0.98`).
     pub gear_down: bool,
+    /// Cockpit landing gear lever position (`true` = DOWN, `false` = UP).
+    pub gear_handle_down: bool,
+    /// Actual physical gear deployment ratio `[nose, left_main, right_main]` in `0.0..=1.0`.
+    pub gear_deploy: [f32; 3],
     pub park_brake_on: bool,
     pub brake_fan_on: bool,
     /// Autobrake: 0 = OFF, 1 = LO, 2 = MED, 3 = MAX
@@ -65,6 +70,26 @@ pub struct A320FcuState {
     pub tcas_tara: bool,
 
     pub last_rx: Option<Instant>,
+}
+
+impl A320FcuState {
+    /// Returns true if any landing gear strut is currently unlocked / in transit (`0.02 < r < 0.98`).
+    pub fn is_gear_in_transit(&self) -> bool {
+        self.gear_deploy.iter().any(|&r| r > 0.02 && r < 0.98)
+    }
+
+    /// Recomputes `gear_down` from the 3 physical gear strut deployment ratios.
+    pub fn sync_gear_down_from_deploy(&mut self) {
+        self.gear_down = self.gear_deploy.iter().all(|&r| r >= 0.98);
+    }
+
+    /// Sets all 3 physical gear struts to either fully down (`1.0`) or fully retracted (`0.0`).
+    pub fn set_all_gear_deployed(&mut self, down: bool) {
+        let v = if down { 1.0 } else { 0.0 };
+        self.gear_deploy = [v, v, v];
+        self.gear_down = down;
+        self.gear_handle_down = down;
+    }
 }
 
 impl Default for A320FcuState {
@@ -102,6 +127,8 @@ impl Default for A320FcuState {
             eng_mode: 0,
             ecam_page: "APU",
             gear_down: true,
+            gear_handle_down: true,
+            gear_deploy: [1.0, 1.0, 1.0],
             park_brake_on: true,
             brake_fan_on: false,
             autobrake_mode: 0,
@@ -165,6 +192,9 @@ pub const DREF_PARK_BRAKE: i32 = 61;
 pub const DREF_FLAP_RATIO: i32 = 62;
 pub const DREF_SPDBRK_RATIO: i32 = 63;
 pub const DREF_BRAKE_FAN: i32 = 64;
+pub const DREF_GEAR_DEPLOY: i32 = 65;
+pub const DREF_GEAR_LEFT_DEPLOY: i32 = 66;
+pub const DREF_GEAR_RIGHT_DEPLOY: i32 = 67;
 
 // Panel 4 Dataref IDs
 pub const DREF_STROBE: i32 = 70;
@@ -202,6 +232,15 @@ pub const UDP_RREF_SUBSCRIPTIONS: &[(i32, &str)] = &[
     (DREF_TOLISS_EXPED, "AirbusFBW/EXPEDilluminated"),
     (DREF_APU_N1, "sim/cockpit2/electrical/APU_N1_percent"),
     (DREF_GEAR_HANDLE, "sim/cockpit2/controls/gear_handle_down"),
+    (DREF_GEAR_DEPLOY, "sim/flightmodel2/gear/deploy_ratio[0]"),
+    (
+        DREF_GEAR_LEFT_DEPLOY,
+        "sim/flightmodel2/gear/deploy_ratio[1]",
+    ),
+    (
+        DREF_GEAR_RIGHT_DEPLOY,
+        "sim/flightmodel2/gear/deploy_ratio[2]",
+    ),
     (DREF_PARK_BRAKE, "sim/cockpit2/controls/parking_brake_ratio"),
     (DREF_FLAP_RATIO, "sim/cockpit2/controls/flap_ratio"),
     (DREF_SPDBRK_RATIO, "sim/cockpit2/controls/speedbrake_ratio"),
@@ -248,6 +287,7 @@ pub const APU_PANEL_DATAREFS: &[(i32, &str)] = &[
 
 pub const FLT_PANEL_DATAREFS: &[(i32, &str)] = &[
     (DREF_GEAR_HANDLE, "sim/cockpit2/controls/gear_handle_down"),
+    (DREF_GEAR_DEPLOY, "sim/flightmodel2/gear/deploy_ratio"),
     (DREF_PARK_BRAKE, "sim/cockpit2/controls/parking_brake_ratio"),
     (DREF_FLAP_RATIO, "sim/cockpit2/controls/flap_ratio"),
     (DREF_SPDBRK_RATIO, "sim/cockpit2/controls/speedbrake_ratio"),
@@ -277,6 +317,18 @@ pub fn datarefs_for_panel(active_panel: &str) -> &'static [(i32, &'static str)] 
         "flt" => FLT_PANEL_DATAREFS,
         "sys" => SYS_PANEL_DATAREFS,
         _ => FCU_PANEL_DATAREFS,
+    }
+}
+
+/// Applies an incoming array dataref value update (e.g., `sim/flightmodel2/gear/deploy_ratio`)
+/// to `state`.
+pub fn apply_dref_array_update(state: &mut A320FcuState, id: i32, vals: &[f32]) {
+    if id == DREF_GEAR_DEPLOY && !vals.is_empty() {
+        let nose = vals[0].clamp(0.0, 1.0);
+        let left = vals.get(1).copied().unwrap_or(nose).clamp(0.0, 1.0);
+        let right = vals.get(2).copied().unwrap_or(left).clamp(0.0, 1.0);
+        state.gear_deploy = [nose, left, right];
+        state.sync_gear_down_from_deploy();
     }
 }
 
@@ -326,7 +378,19 @@ pub fn apply_dref_update(
         DREF_ENG_MODE if changed => state.eng_mode = val.round() as i8,
         DREF_BEACON if changed => state.beacon_on = val > 0.5,
         // Panel 3 (Gear, Brakes, Flaps, Speedbrakes)
-        DREF_GEAR_HANDLE if changed => state.gear_down = val > 0.5,
+        DREF_GEAR_HANDLE => state.gear_handle_down = val > 0.5,
+        DREF_GEAR_DEPLOY => {
+            state.gear_deploy[0] = val.clamp(0.0, 1.0);
+            state.sync_gear_down_from_deploy();
+        }
+        DREF_GEAR_LEFT_DEPLOY => {
+            state.gear_deploy[1] = val.clamp(0.0, 1.0);
+            state.sync_gear_down_from_deploy();
+        }
+        DREF_GEAR_RIGHT_DEPLOY => {
+            state.gear_deploy[2] = val.clamp(0.0, 1.0);
+            state.sync_gear_down_from_deploy();
+        }
         DREF_PARK_BRAKE if changed => state.park_brake_on = val > 0.5,
         DREF_FLAP_RATIO if changed => state.flap_ratio = val.clamp(0.0, 1.0),
         DREF_SPDBRK_RATIO if changed => state.spdbrk_ratio = val.clamp(-0.5, 1.0),
@@ -373,5 +437,18 @@ mod tests {
         apply_dref_update(&mut state, &mut prev, DREF_APU_N1, 98.5);
         assert!(state.apu_avail);
         assert!(!state.apu_start_on);
+
+        // Actual landing gear deployment array: in transit (UNLK), retracted (UP), and locked (DOWN)
+        apply_dref_array_update(&mut state, DREF_GEAR_DEPLOY, &[0.45, 0.50, 0.50]);
+        assert!(state.is_gear_in_transit());
+        assert!(!state.gear_down);
+
+        apply_dref_array_update(&mut state, DREF_GEAR_DEPLOY, &[0.0, 0.0, 0.0]);
+        assert!(!state.is_gear_in_transit());
+        assert!(!state.gear_down);
+
+        apply_dref_array_update(&mut state, DREF_GEAR_DEPLOY, &[1.0, 1.0, 1.0]);
+        assert!(!state.is_gear_in_transit());
+        assert!(state.gear_down);
     }
 }

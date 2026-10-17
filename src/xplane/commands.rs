@@ -302,7 +302,11 @@ where
     match norm {
         "gear" | "ldg_gear" => {
             send_cmd("sim/flight_controls/landing_gear_toggle");
-            state.gear_down = !state.gear_down;
+            state.gear_handle_down = !state.gear_handle_down;
+            let xplane_live = state.last_rx.is_some_and(|t| t.elapsed().as_secs() < 5);
+            if !xplane_live {
+                state.set_all_gear_deployed(state.gear_handle_down);
+            }
             true
         }
         "park_brake" | "parking_brake" => {

@@ -13,7 +13,7 @@ pub fn extract_json_u64_id(json: &str) -> Option<u64> {
 /// Extracts the first numeric `"data": <f32>` value from an X-Plane 12 Local WebAPI JSON response.
 pub fn extract_json_f32_data(json: &str) -> Option<f32> {
     let idx = json.find("\"data\":")?;
-    let after = &json[idx + 7..];
+    let after = json[idx + 7..].trim_start().trim_start_matches('[');
     let num_str: String = after
         .trim_start()
         .chars()
@@ -22,6 +22,24 @@ pub fn extract_json_f32_data(json: &str) -> Option<f32> {
         })
         .collect();
     num_str.parse::<f32>().ok()
+}
+
+/// Extracts a numeric array `"data": [<f32>, ...]` (or single scalar `"data": <f32>`)
+/// from an X-Plane 12 Local WebAPI JSON response.
+pub fn extract_json_f32_array(json: &str) -> Option<Vec<f32>> {
+    let idx = json.find("\"data\":")?;
+    let after = json[idx + 7..].trim_start();
+    if let Some(arr_body) = after.strip_prefix('[') {
+        let end = arr_body.find(']')?;
+        let inner = &arr_body[..end];
+        let vals: Vec<f32> = inner
+            .split(',')
+            .filter_map(|s| s.trim().parse::<f32>().ok())
+            .collect();
+        if vals.is_empty() { None } else { Some(vals) }
+    } else {
+        extract_json_f32_data(json).map(|v| vec![v])
+    }
 }
 
 /// Formats an HTTP/1.1 request targeting X-Plane 12's Local WebAPI (`127.0.0.1:8086`).
@@ -55,6 +73,10 @@ mod tests {
         assert_eq!(extract_json_f32_data(r#"{"data": -1200}"#), Some(-1200.0));
         assert_eq!(extract_json_f32_data(r#"{"data": 1.5e3}"#), Some(1500.0));
         assert_eq!(extract_json_f32_data(r#"{"error":"not_found"}"#), None);
+        assert_eq!(
+            extract_json_f32_array(r#"{"data":[1,0.5,0,0,0]}"#),
+            Some(vec![1.0, 0.5, 0.0, 0.0, 0.0])
+        );
     }
 
     #[test]
