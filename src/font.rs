@@ -24,6 +24,15 @@ pub fn draw_hline(img: &mut RgbImage, x: i32, y: i32, w: i32, color: Rgb<u8>) {
     }
 }
 
+/// Draw a downward-pointing filled triangle (used for Airbus landing gear LOCKED DOWN indicators).
+/// `cx` is the horizontal center, `top_y` is the top edge, and `half_w` is the half-width at the top.
+pub fn draw_triangle_down(img: &mut RgbImage, cx: i32, top_y: i32, half_w: i32, color: Rgb<u8>) {
+    for row in 0..=half_w {
+        let span = half_w - row;
+        draw_hline(img, cx - span, top_y + row, span * 2 + 1, color);
+    }
+}
+
 /// Draw tactical ops-center corner brackets around a rectangle.
 pub fn draw_corner_brackets(
     img: &mut RgbImage,
@@ -203,6 +212,7 @@ fn glyph_5x7(c: char) -> [u8; 7] {
         'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
         'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
         '%' => [0b11001, 0b11010, 0b00010, 0b00100, 0b01000, 0b01011, 0b10011],
+        '+' => [0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000],
         ':' => [0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000],
         '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100],
         '-' => [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
@@ -253,11 +263,51 @@ fn glyph_3x5(c: char) -> [u8; 5] {
         'Y' => [0b101, 0b101, 0b010, 0b010, 0b010],
         'Z' => [0b111, 0b001, 0b010, 0b100, 0b111],
         '%' => [0b101, 0b001, 0b010, 0b100, 0b101],
+        '+' => [0b000, 0b010, 0b111, 0b010, 0b000],
         ':' => [0b000, 0b010, 0b000, 0b010, 0b000],
         '.' => [0b000, 0b000, 0b000, 0b000, 0b010],
         '-' => [0b000, 0b000, 0b111, 0b000, 0b000],
         '/' => [0b001, 0b001, 0b010, 0b100, 0b100],
         '>' => [0b100, 0b010, 0b001, 0b010, 0b100],
         _ => [0b000; 5],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_text_width_5x7() {
+        assert_eq!(text_width_5x7("", 1), 0);
+        assert_eq!(text_width_5x7("A", 1), 5);
+        assert_eq!(text_width_5x7("AB", 1), 11);
+        assert_eq!(text_width_5x7("CPU", 1), 17);
+        assert_eq!(text_width_5x7("CPU", 2), 34);
+    }
+
+    #[test]
+    fn test_scale_color() {
+        let green = Rgb([0, 255, 65]);
+        assert_eq!(scale_color(green, 0.0), Rgb([0, 0, 0]));
+        assert_eq!(scale_color(green, 1.0), green);
+        assert_eq!(scale_color(green, 2.0), green);
+        let half = scale_color(green, 0.5);
+        assert_eq!(half, Rgb([0, 128, 33]));
+    }
+
+    #[test]
+    fn test_draw_primitives_out_of_bounds_safe() {
+        let mut img = RgbImage::from_pixel(16, 16, Rgb([0, 0, 0]));
+        let c = Rgb([0, 255, 65]);
+        put_px(&mut img, -5, -5, c);
+        put_px(&mut img, 100, 100, c);
+        fill_rect(&mut img, -2, -2, 8, 8, c);
+        draw_rect_border(&mut img, 0, 0, 16, 16, 1, c);
+        draw_triangle_down(&mut img, 8, 4, 3, c);
+        draw_text_5x7(&mut img, 1, 1, "A320+", 1, c);
+        draw_text_3x5(&mut img, 1, 9, ">FLT", 1, c);
+        assert_eq!(*img.get_pixel(0, 0), c);
+        assert_eq!(*img.get_pixel(8, 4), c);
     }
 }
