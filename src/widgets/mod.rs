@@ -1,4 +1,5 @@
 pub mod airbus;
+pub mod icons;
 pub mod navigation;
 pub mod system;
 

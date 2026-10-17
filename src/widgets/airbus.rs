@@ -1,4 +1,8 @@
 use super::TelemetrySnapshot;
+use super::icons::{
+    draw_arrow_down, draw_arrow_up, draw_autobrake_meter, draw_brake_icon, draw_fan_icon,
+    draw_flap_notches, draw_speedbrake_icon, draw_triangle_up,
+};
 use crate::config::{ResolvedTheme, TileConfig};
 use crate::font::{
     draw_hline, draw_rect_border, draw_text_3x5, draw_text_5x7, draw_triangle_down, fill_rect,
@@ -51,13 +55,22 @@ pub fn render_a320_fcu_tile(
             render_eng_mode_selector(&mut img, w, h, tile, fcu, theme);
         }
         "gear" | "ldg_gear" => {
-            render_landing_gear(&mut img, w, h, tile, fcu, theme);
+            render_landing_gear(&mut img, w, h, fcu, theme);
         }
         "flaps_up" | "flaps_dn" | "flaps_down" => {
-            render_flaps_control(&mut img, w, h, &ctrl, tile, fcu, theme);
+            render_flaps_control(&mut img, w, h, &ctrl, fcu, theme);
         }
         "spdbrk_dn" | "spdbrk_retract" | "spdbrk_up" | "spdbrk_extend" => {
-            render_speedbrake_control(&mut img, w, h, &ctrl, tile, fcu, theme);
+            render_speedbrake_control(&mut img, w, h, &ctrl, fcu, theme);
+        }
+        "park_brake" | "parking_brake" => {
+            render_park_brake_control(&mut img, w, h, tile, fcu, theme);
+        }
+        "brake_fan" | "brk_fan" => {
+            render_brake_fan_control(&mut img, w, h, tile, fcu, theme);
+        }
+        "abrk_lo" | "abrk_med" | "abrk_max" => {
+            render_autobrake_control(&mut img, w, h, &ctrl, tile, fcu, theme);
         }
         "nose_light" | "taxi_light" => {
             render_nose_light_switch(&mut img, w, h, tile, fcu, theme);
@@ -277,42 +290,36 @@ fn render_eng_mode_selector(
     draw_text_3x5(img, (w - sw) / 2, h - 13, sub_str, 1, theme.phosphor_dim);
 }
 
-/// Airbus Center Instrument Panel 3-Green-Triangle Landing Gear Indicator (`LDG GEAR`).
+/// Airbus Center Instrument Panel 3-Triangle Landing Gear Indicator (`LDG GEAR`) with Up/Down arrows.
 fn render_landing_gear(
     img: &mut RgbImage,
     w: i32,
     h: i32,
-    tile: &TileConfig,
     fcu: &A320FcuState,
     theme: &ResolvedTheme,
 ) {
-    let label = tile.label.as_deref().unwrap_or("LDG GEAR");
     let border_col = if fcu.gear_down {
         scale_color(theme.phosphor_green, 0.65)
     } else {
         theme.grid_dim
     };
     draw_rect_border(img, 4, 4, w - 8, h - 8, 1, border_col);
-    draw_hline(img, 5, 34, w - 10, theme.grid_dim);
+    draw_hline(img, 5, 35, w - 10, theme.grid_dim);
 
     if fcu.gear_down {
-        // 3 green triangles: Nose (center-top), Left, Right
+        // 3 green locked-down triangles in nose + main gear formation
         let tri_col = theme.phosphor_green;
-        draw_triangle_down(img, 20, 14, 5, tri_col);
-        draw_triangle_down(img, w / 2, 11, 5, tri_col);
-        draw_triangle_down(img, w - 20, 14, 5, tri_col);
-        draw_text_3x5(img, (w - 15) / 2, 25, "DN", 1, theme.phosphor_green);
+        draw_triangle_down(img, 20, 14, 6, tri_col);
+        draw_triangle_down(img, w / 2, 10, 6, tri_col);
+        draw_triangle_down(img, w - 20, 14, 6, tri_col);
+        draw_text_3x5(img, (w - 19) / 2, 25, "DOWN", 1, theme.phosphor_green);
     } else {
-        let up_txt = "UP / RET";
-        let tw = text_width_5x7(up_txt, 1);
-        draw_text_5x7(
-            img,
-            ((w - tw) / 2).max(6),
-            16,
-            up_txt,
-            1,
-            scale_color(theme.phosphor_dim, 0.65),
-        );
+        // 3 upward retracted triangles + UP
+        let up_col = scale_color(theme.phosphor_dim, 0.70);
+        draw_triangle_up(img, 20, 12, 5, up_col);
+        draw_triangle_up(img, w / 2, 9, 5, up_col);
+        draw_triangle_up(img, w - 20, 12, 5, up_col);
+        draw_text_3x5(img, (w - 7) / 2, 24, "UP", 1, up_col);
     }
 
     let leg_col = if fcu.gear_down {
@@ -320,49 +327,214 @@ fn render_landing_gear(
     } else {
         theme.phosphor_dim
     };
-    let lw = text_width_5x7(label, 1);
-    draw_text_5x7(img, ((w - lw) / 2).max(5), 46, label, 1, leg_col);
+    draw_text_5x7(img, 12, 46, "GEAR", 1, leg_col);
+    if fcu.gear_down {
+        draw_arrow_down(img, 48, 43, 12, 4, theme.phosphor_green);
+    } else {
+        draw_arrow_up(img, 48, 43, 12, 4, theme.phosphor_dim);
+    }
 }
 
-/// Airbus Flaps Notch Control (`FLAPS UP` / `FLAPS DN`) showing live flap setting (`0`, `1`, `2`, `3`, `FULL`).
+/// Airbus Flaps Control (`flaps_up` / `flaps_dn`) with prominent Up/Down arrows and 4-notch visual bar.
 fn render_flaps_control(
     img: &mut RgbImage,
     w: i32,
     h: i32,
     ctrl: &str,
-    tile: &TileConfig,
     fcu: &A320FcuState,
     theme: &ResolvedTheme,
 ) {
-    let default_label = if ctrl == "flaps_up" {
-        "FLAPS UP"
-    } else {
-        "FLAPS DN"
-    };
-    let label = tile.label.as_deref().unwrap_or(default_label);
-
+    let is_up = ctrl == "flaps_up";
     let notch = (fcu.flap_ratio.clamp(0.0, 1.0) * 4.0).round() as u8;
     let (notch_str, col) = match notch {
-        0 => ("FLAP 0", theme.phosphor_green),
-        1 => ("FLAP 1", theme.amber),
-        2 => ("FLAP 2", theme.amber),
-        3 => ("FLAP 3", theme.amber),
+        0 => ("0", theme.phosphor_green),
+        1 => ("1", theme.amber),
+        2 => ("2", theme.amber),
+        3 => ("3", theme.amber),
         _ => ("FULL", theme.amber),
     };
 
     draw_rect_border(img, 4, 4, w - 8, h - 8, 1, scale_color(col, 0.55));
-    draw_hline(img, 5, 33, w - 10, theme.grid_dim);
+    draw_hline(img, 5, 36, w - 10, theme.grid_dim);
 
-    fill_rect(img, 8, 9, w - 16, 19, scale_color(col, 0.12));
-    let tw = text_width_5x7(notch_str, 1);
-    draw_text_5x7(img, ((w - tw) / 2).max(6), 15, notch_str, 1, col);
+    // Top-left: prominent directional arrow icon (↑ for retract, ↓ for extend)
+    let arrow_col = if is_up {
+        theme.phosphor_green
+    } else {
+        theme.amber
+    };
+    if is_up {
+        draw_arrow_up(img, 16, 10, 14, 5, arrow_col);
+    } else {
+        draw_arrow_down(img, 16, 10, 14, 5, arrow_col);
+    }
 
-    let lw = text_width_5x7(label, 1);
-    draw_text_5x7(img, ((w - lw) / 2).max(5), 46, label, 1, theme.phosphor_dim);
+    // Top-right: current flap notch readout
+    let disp = if notch == 4 {
+        "FULL".to_string()
+    } else {
+        format!("FLP {notch_str}")
+    };
+    draw_text_5x7(img, 28, 13, &disp, 1, col);
+
+    // Visual 4-notch flap bar along bottom of top window
+    draw_flap_notches(
+        img,
+        17,
+        28,
+        notch,
+        col,
+        scale_color(theme.phosphor_dim, 0.25),
+    );
+
+    // Bottom legend: "FLAPS" + crisp Up/Down arrow icon
+    draw_text_5x7(img, 10, 47, "FLAPS", 1, theme.phosphor_dim);
+    if is_up {
+        draw_arrow_up(img, 52, 44, 13, 4, arrow_col);
+    } else {
+        draw_arrow_down(img, 52, 44, 13, 4, arrow_col);
+    }
 }
 
-/// Airbus Speedbrake / Ground Spoiler Control (`SPDBRK -` / `SPDBRK +`).
+/// Airbus Speedbrake / Ground Spoiler Control (`spdbrk_dn` / `spdbrk_up`) with wing spoiler icon & arrows.
 fn render_speedbrake_control(
+    img: &mut RgbImage,
+    w: i32,
+    h: i32,
+    ctrl: &str,
+    fcu: &A320FcuState,
+    theme: &ResolvedTheme,
+) {
+    let is_retract = ctrl.contains("dn") || ctrl.contains("retract");
+    let (status_str, col) = if fcu.spdbrk_ratio < -0.1 {
+        ("ARM".to_string(), theme.phosphor_green)
+    } else if fcu.spdbrk_ratio <= 0.05 {
+        ("RET".to_string(), theme.phosphor_green)
+    } else if fcu.spdbrk_ratio >= 0.95 {
+        ("FULL".to_string(), theme.amber)
+    } else {
+        (format!("{:.0}%", fcu.spdbrk_ratio * 100.0), theme.amber)
+    };
+
+    draw_rect_border(img, 4, 4, w - 8, h - 8, 1, scale_color(col, 0.55));
+    draw_hline(img, 5, 35, w - 10, theme.grid_dim);
+
+    // Top-left: wing cross-section with hinged spoiler flap
+    draw_speedbrake_icon(
+        img,
+        10,
+        14,
+        fcu.spdbrk_ratio.max(0.0),
+        col,
+        theme.phosphor_dim,
+    );
+
+    // Top-right: live spoiler deployment readout
+    let tw = text_width_5x7(&status_str, 1);
+    draw_text_5x7(img, (48 - tw / 2).max(30), 16, &status_str, 1, col);
+
+    // Bottom legend: "SPDBRK" + crisp Down/Up arrow icon
+    let arrow_col = if is_retract {
+        theme.phosphor_green
+    } else {
+        theme.amber
+    };
+    draw_text_5x7(img, 7, 47, "SPDBRK", 1, theme.phosphor_dim);
+    if is_retract {
+        draw_arrow_down(img, 55, 44, 13, 4, arrow_col);
+    } else {
+        draw_arrow_up(img, 55, 44, 13, 4, arrow_col);
+    }
+}
+
+/// Airbus Parking Brake (`park_brake`) with brake rotor/caliper icon `((O))`.
+fn render_park_brake_control(
+    img: &mut RgbImage,
+    w: i32,
+    h: i32,
+    tile: &TileConfig,
+    fcu: &A320FcuState,
+    theme: &ResolvedTheme,
+) {
+    let label = tile.label.as_deref().unwrap_or("PARK BRK");
+    let col = if fcu.park_brake_on {
+        theme.amber
+    } else {
+        theme.phosphor_green
+    };
+    let border_col = if fcu.park_brake_on {
+        scale_color(theme.amber, 0.65)
+    } else {
+        theme.grid_dim
+    };
+
+    draw_rect_border(img, 4, 4, w - 8, h - 8, 1, border_col);
+    draw_hline(img, 5, 33, w - 10, theme.grid_dim);
+
+    draw_brake_icon(img, 20, 18, col);
+    let txt = if fcu.park_brake_on { "PARK" } else { "FREE" };
+    draw_text_5x7(img, 34, 15, txt, 1, col);
+
+    let lw = text_width_5x7(label, 1);
+    draw_text_5x7(
+        img,
+        ((w - lw) / 2).max(5),
+        46,
+        label,
+        1,
+        if fcu.park_brake_on {
+            theme.amber
+        } else {
+            theme.phosphor_dim
+        },
+    );
+}
+
+/// Airbus Brake Fan (`brake_fan`) with 4-blade impeller icon.
+fn render_brake_fan_control(
+    img: &mut RgbImage,
+    w: i32,
+    h: i32,
+    tile: &TileConfig,
+    fcu: &A320FcuState,
+    theme: &ResolvedTheme,
+) {
+    let label = tile.label.as_deref().unwrap_or("BRK FAN");
+    let col = if fcu.brake_fan_on {
+        theme.phosphor_green
+    } else {
+        scale_color(theme.phosphor_dim, 0.55)
+    };
+    let border_col = if fcu.brake_fan_on {
+        scale_color(theme.phosphor_green, 0.65)
+    } else {
+        theme.grid_dim
+    };
+
+    draw_rect_border(img, 4, 4, w - 8, h - 8, 1, border_col);
+    draw_hline(img, 5, 33, w - 10, theme.grid_dim);
+
+    draw_fan_icon(img, 21, 18, col);
+    let txt = if fcu.brake_fan_on { "ON" } else { "OFF" };
+    draw_text_5x7(img, 35, 15, txt, 1, col);
+
+    let lw = text_width_5x7(label, 1);
+    draw_text_5x7(
+        img,
+        ((w - lw) / 2).max(5),
+        46,
+        label,
+        1,
+        if fcu.brake_fan_on {
+            theme.phosphor_green
+        } else {
+            theme.phosphor_dim
+        },
+    );
+}
+
+/// Airbus Autobrake (`abrk_lo`, `abrk_med`, `abrk_max`) with 3-bar deceleration meter.
+fn render_autobrake_control(
     img: &mut RgbImage,
     w: i32,
     h: i32,
@@ -371,35 +543,53 @@ fn render_speedbrake_control(
     fcu: &A320FcuState,
     theme: &ResolvedTheme,
 ) {
-    let default_label = if ctrl.contains("dn") || ctrl.contains("retract") {
-        "SPDBRK -"
-    } else {
-        "SPDBRK +"
+    let (level, default_label, short_txt) = match ctrl {
+        "abrk_lo" => (1u8, "A/BRK LO", "LO"),
+        "abrk_med" => (2u8, "A/BRK MD", "MED"),
+        _ => (3u8, "A/BRK MX", "MAX"),
     };
-    let label = tile.label.as_deref().unwrap_or(default_label);
-
-    let (status_str, col) = if fcu.spdbrk_ratio < -0.1 {
-        ("ARMED".to_string(), theme.phosphor_green)
-    } else if fcu.spdbrk_ratio <= 0.05 {
-        ("RET".to_string(), theme.phosphor_green)
-    } else if fcu.spdbrk_ratio >= 0.95 {
-        ("FULL".to_string(), theme.amber)
+    let is_on = fcu.autobrake_mode == level;
+    let accent = if level == 3 && is_on {
+        theme.amber
     } else {
-        (
-            format!("{:.0}%", fcu.spdbrk_ratio * 100.0),
-            theme.amber,
-        )
+        theme.phosphor_green
+    };
+    let border_col = if is_on {
+        scale_color(accent, 0.65)
+    } else {
+        theme.grid_dim
     };
 
-    draw_rect_border(img, 4, 4, w - 8, h - 8, 1, scale_color(col, 0.55));
+    draw_rect_border(img, 4, 4, w - 8, h - 8, 1, border_col);
     draw_hline(img, 5, 33, w - 10, theme.grid_dim);
 
-    fill_rect(img, 8, 9, w - 16, 19, scale_color(col, 0.12));
-    let tw = text_width_5x7(&status_str, 1);
-    draw_text_5x7(img, ((w - tw) / 2).max(6), 15, &status_str, 1, col);
+    let meter_col = if is_on {
+        accent
+    } else {
+        scale_color(theme.phosphor_dim, 0.60)
+    };
+    draw_autobrake_meter(
+        img,
+        12,
+        13,
+        level,
+        meter_col,
+        scale_color(theme.phosphor_dim, 0.22),
+    );
 
+    let status_txt = if is_on { "ON" } else { short_txt };
+    draw_text_5x7(img, 34, 15, status_txt, 1, meter_col);
+
+    let label = tile.label.as_deref().unwrap_or(default_label);
     let lw = text_width_5x7(label, 1);
-    draw_text_5x7(img, ((w - lw) / 2).max(5), 46, label, 1, theme.phosphor_dim);
+    draw_text_5x7(
+        img,
+        ((w - lw) / 2).max(5),
+        46,
+        label,
+        1,
+        if is_on { accent } else { theme.phosphor_dim },
+    );
 }
 
 /// Airbus Overhead 3-Position Nose Light Switch (`OFF` / `TAXI` / `T.O`).
@@ -461,12 +651,7 @@ fn render_korry_two_window(
         "beacon" => ("BEACON", fcu.beacon_on, "ON", "OFF", true),
         "ecam_apu" => ("ECAM APU", fcu.ecam_page == "APU", "PAGE", "ECAM", false),
         "ecam_eng" => ("ECAM ENG", fcu.ecam_page == "ENG", "PAGE", "ECAM", false),
-        // Panel 3 (Brakes, Autobrake, T.O Config, ECAM F/CTL & WHEEL)
-        "park_brake" | "parking_brake" => ("PARK BRK", fcu.park_brake_on, "PARK", "REL", true),
-        "brake_fan" | "brk_fan" => ("BRK FAN", fcu.brake_fan_on, "ON", "OFF", false),
-        "abrk_lo" => ("A/BRK LO", fcu.autobrake_mode == 1, "ON", "LO", false),
-        "abrk_med" => ("A/BRK MD", fcu.autobrake_mode == 2, "ON", "MED", false),
-        "abrk_max" => ("A/BRK MX", fcu.autobrake_mode == 3, "ON", "MAX", true),
+        // Panel 3 (T.O Config, ECAM F/CTL & WHEEL)
         "to_config" | "to_cfg" => ("T.O CFG", fcu.to_config_ok, "NORM", "TEST", false),
         "ecam_fctl" => ("ECAM F/C", fcu.ecam_page == "F/CTL", "PAGE", "ECAM", false),
         "ecam_whl" | "ecam_wheel" => ("ECAM WHL", fcu.ecam_page == "WHEEL", "PAGE", "ECAM", false),
