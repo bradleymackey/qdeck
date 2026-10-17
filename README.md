@@ -8,7 +8,7 @@ A tactical, phosphor-green operations-center controller for the **Elgato Stream 
 
 ## Features
 
-- **Tactical Phosphor CRT Aesthetic**: Custom `5×7` and `3×5` bitmap fonts (`src/font.rs`) and crisp cockpit vector icons (`src/widgets/icons.rs`) rendered in phosphor green (`#00FF66`), caution/selected amber (`#FFB000`), and master-warning red (`#FF3333`) on a deep `#060A08` background.
+- **Tactical Phosphor CRT Aesthetic**: Custom `5×7` and `3×5` bitmap fonts (`src/font/`) and crisp cockpit vector icons (`src/widgets/icons.rs`) rendered in phosphor green (`#00FF66`), caution/selected amber (`#FFB000`), and master-warning red (`#FF3333`) on a deep `#060A08` background.
 - **System Telemetry Dashboard (`root` page)**:
   - Live CPU, Memory, Swap, GPU utilization, Disk capacity, Battery/Thermal state, Process count, Clock, Uptime, and Network RX/TX throughput with rolling sparklines.
 - **4-Panel Airbus Cockpit Integration for X-Plane 12 (`xplane` page)**:
@@ -22,7 +22,7 @@ A tactical, phosphor-green operations-center controller for the **Elgato Stream 
        - `BAT 1`, `BAT 2`, `EXT PWR` (`AVAIL` / `ON`), `APU MST`, `APU STR` (live `N xx%` spool-up readout and green `AVAIL`), `APU BLD`, `APU GEN`, `FUEL PMP` (all tank pumps), `ENG MOD` (`NORM` / `IGN/STR` / `CRANK` cycle), `PACK 1/2`, `BEACON`, `ECAM APU`, and `ECAM ENG`.
        - *Note*: Engine 1 & 2 master switches are intentionally omitted because they are bound to dedicated physical throttle-quadrant hardware.
     3. **`FLT` (Landing Gear, Brakes, Flaps & Flight Control Surfaces)**:
-       - `GEAR` with 3-triangle nose/main landing gear indicator and directional `↑` / `↓` arrows.
+       - `GEAR` with 3-triangle nose/main landing gear indicator (`DOWN` green / `UNLK` red in transit / `UP` dim) and directional `↑` / `↓` arrows.
        - `FLAPS ↑` and `FLAPS ↓` with prominent directional arrows and a 4-notch (`0`, `1`, `2`, `3`, `FULL`) visual indicator bar.
        - `SPDBRK ↓` and `SPDBRK ↑` with a wing spoiler cross-section icon, live extension percentage, and directional arrows.
        - `PARK BRK` with a brake rotor/caliper icon (`((O))`), `BRK FAN` with a 4-blade impeller icon, and `A/BRK LO` / `MD` / `MX` with a 3-bar deceleration meter.
@@ -36,7 +36,7 @@ A tactical, phosphor-green operations-center controller for the **Elgato Stream 
   - **Secondary — Native X-Plane UDP (`127.0.0.1:49000`)**: Emits standard `CMND\0` and subscribes via `RREF\0` in parallel.
 - **Hardware Power & Screen Lock Management**:
   - Runs a lightweight **1Hz (`1000ms`)** periodic refresh loop with instant dirty-key redraws on button press and a **120ms** tactile border flash.
-  - Automatically blanks the Stream Deck (`reset()` + `0%` brightness) on `SIGINT`/`SIGTERM`, panic, process exit, or whenever the macOS display is locked or asleep (`src/macos.rs`).
+  - Automatically blanks the Stream Deck (`reset()` + `0%` brightness) on `SIGINT`/`SIGTERM`, panic, process exit, or whenever the macOS display is locked or asleep (`src/macos/`).
 - **Live Config Hot-Reloading**:
   - Watches `~/.config/qdeck/config.toml` and reloads layout or theme changes automatically without restarting.
 
@@ -53,26 +53,50 @@ qdeck/
 ├── src/
 │   ├── lib.rs                # Library crate root exporting modules
 │   ├── main.rs               # Binary entrypoint, CLI flags, signal handling
-│   ├── deck.rs               # Stream Deck hardware loop, input handling, blanking guard
-│   ├── font.rs               # 5x7 & 3x5 bitmap fonts, geometric primitives, color scaling
-│   ├── macos.rs              # CoreGraphics screen-lock / display-sleep detection
 │   ├── telemetry.rs          # macOS CPU, RAM, GPU, Network, Disk, Battery collectors
 │   ├── config/
 │   │   ├── mod.rs            # Config loader (~/.config/qdeck/config.toml) & tile lookup
 │   │   ├── defaults.rs       # Initial default config template for ~/.config/qdeck/config.toml
 │   │   ├── theme.rs          # Hex color parsing and ResolvedTheme palette
 │   │   └── tile.rs           # TileConfig and mode/sub-panel matching
+│   ├── deck/
+│   │   ├── mod.rs            # Stream Deck session loop & active telemetry refresh
+│   │   ├── device.rs         # USB discovery, hardware geometry, and sleep/blanking
+│   │   ├── input.rs          # Button edge detection, ClickAction execution, tap highlights
+│   │   └── render.rs         # Key and full-layout rendering to Stream Deck LCDs
+│   ├── font/
+│   │   ├── mod.rs            # 5x7 & 3x5 bitmap text rendering and unit tests
+│   │   ├── glyphs.rs         # 5x7 & 3x5 bitmap glyph lookup tables
+│   │   └── primitives.rs     # Color scaling, lines, rectangles, and triangle primitives
+│   ├── macos/
+│   │   ├── mod.rs            # macOS platform module re-exports
+│   │   ├── lock.rs           # CoreGraphics / IOKit screen-lock & display-sleep detection
+│   │   ├── service.rs        # launchd LaunchAgent plist generation & installer
+│   │   └── signals.rs        # POSIX SIGINT/SIGTERM/SIGHUP shutdown flag handling
 │   ├── widgets/
 │   │   ├── mod.rs            # Tile dispatcher (system, navigation, Airbus controls)
-│   │   ├── airbus.rs         # Airbus FCU, Korry switches, gear, flaps, speedbrakes
 │   │   ├── icons.rs          # Cockpit vector icons (arrows, brake, fan, spoiler, notches)
 │   │   ├── navigation.rs     # Mode selector and sub-panel switcher tiles
-│   │   └── system.rs         # System telemetry tiles & sparklines
+│   │   ├── system.rs         # System telemetry tiles & sparklines
+│   │   └── airbus/
+│   │       ├── mod.rs        # Airbus tile dispatcher
+│   │       ├── fcu.rs        # Glare-shield Master Warn/Caut & FCU digital LCD windows
+│   │       ├── apu.rs        # APU Start (AVAIL/N1%) & Engine Mode Selector tiles
+│   │       ├── surfaces.rs   # 3-strut Landing Gear, Flaps, and Speedbrake tiles
+│   │       ├── brakes.rs     # Parking Brake, Brake Fan, and Autobrake tiles
+│   │       └── korry.rs      # 2-window & 3-bar Korry switches and 3-pos Nose Light
 │   └── xplane/
 │       ├── mod.rs            # XPlaneClient combining UDP socket + WebAPI polling
-│       ├── state.rs          # A320FcuState, dataref tables, edge-triggered state updates
-│       ├── commands.rs       # Multi-aircraft command dispatch (Laminar A333, ToLiss, sim/*)
-│       └── webapi.rs         # X-Plane 12 Local WebAPI HTTP v2 client (port 8086)
+│       ├── webapi.rs         # X-Plane 12 Local WebAPI HTTP v2 client (port 8086)
+│       ├── state/
+│       │   ├── mod.rs        # A320FcuState & edge-triggered dataref state updates
+│       │   └── datarefs.rs   # Dataref subscription tables and per-panel WebAPI filters
+│       └── commands/
+│           ├── mod.rs        # Control dispatcher & unit tests across Panels 1–4
+│           ├── fcu.rs        # Panel 1 (FCU & Glare-Shield) command handlers
+│           ├── apu.rs        # Panel 2 (Electrical, APU & Engine Prep) command handlers
+│           ├── flt.rs        # Panel 3 (Gear, Brakes, Flaps & Spoilers) command handlers
+│           └── sys.rs        # Panel 4 (Lights, Anti-Ice, ADIRS, Baro & TCAS) command handlers
 └── tests/
     └── integration_test.rs   # End-to-end config, panel cycling, rendering & command tests
 ```
