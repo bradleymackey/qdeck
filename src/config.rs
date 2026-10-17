@@ -60,22 +60,25 @@ warn_threshold = 60.0
 crit_threshold = 85.0
 
 # -----------------------------------------------------------------------------
-# Mode: "xplane" (Airbus A320 FCU Autopilot & Glare-Shield Controls)
-# Communicates directly with X-Plane via built-in UDP on 127.0.0.1:49000
+# Mode: "xplane" — Secondary Panel Selector (Key 0,1)
+# Toggles between Panel 1 ("fcu" Autopilot) and Panel 2 ("apu" APU / Eng Start)
 # -----------------------------------------------------------------------------
-# Row 0 (Top Row): Mode | FD 1 | AP 1 | AP 2 | A/THR
 [[tiles]]
-type = "a320_fcu"
-control = "fd"
+type = "panel"
 position = "0,1"
 mode = "xplane"
-label = "FD 1"
+label = "PANEL"
 
+# =============================================================================
+# Mode: "xplane" // PANEL 1: "fcu" (Airbus A320/A330 FCU & Glare-Shield)
+# =============================================================================
+# Row 0: MODE (0,0) | PANEL (0,1) | AP 1 (0,2) | AP 2 (0,3) | A/THR (0,4)
 [[tiles]]
 type = "a320_fcu"
 control = "ap1"
 position = "0,2"
 mode = "xplane"
+panel = "fcu"
 label = "AP 1"
 
 [[tiles]]
@@ -83,6 +86,7 @@ type = "a320_fcu"
 control = "ap2"
 position = "0,3"
 mode = "xplane"
+panel = "fcu"
 label = "AP 2"
 
 [[tiles]]
@@ -90,69 +94,79 @@ type = "a320_fcu"
 control = "athr"
 position = "0,4"
 mode = "xplane"
+panel = "fcu"
 label = "A/THR"
 
-# Row 1 (Middle Row): LOC | HDG | ALT | EXPED | APPR
+# Row 1: FD 1 (1,0) | SPD (1,1) | HDG (1,2) | ALT (1,3) | APPR (1,4)
 [[tiles]]
 type = "a320_fcu"
-control = "loc"
+control = "fd"
 position = "1,0"
 mode = "xplane"
-label = "LOC"
+panel = "fcu"
+label = "FD 1"
+
+[[tiles]]
+type = "a320_fcu"
+control = "spd"
+position = "1,1"
+mode = "xplane"
+panel = "fcu"
+label = "SPD"
 
 [[tiles]]
 type = "a320_fcu"
 control = "hdg"
-position = "1,1"
+position = "1,2"
 mode = "xplane"
+panel = "fcu"
 label = "HDG"
 
 [[tiles]]
 type = "a320_fcu"
 control = "alt"
-position = "1,2"
-mode = "xplane"
-label = "ALT"
-
-[[tiles]]
-type = "a320_fcu"
-control = "exped"
 position = "1,3"
 mode = "xplane"
-label = "EXPED"
+panel = "fcu"
+label = "ALT"
 
 [[tiles]]
 type = "a320_fcu"
 control = "appr"
 position = "1,4"
 mode = "xplane"
+panel = "fcu"
 label = "APPR"
 
-# Row 2 (Bottom Row): MASTER WARN | MASTER CAUT | SPD | HDG/TRK | V/S 0
+# Row 2: M WARN (2,0) | M CAUT (2,1) | LOC (2,2) | FPA (2,3) | V/S (2,4)
 [[tiles]]
 type = "a320_fcu"
 control = "master_warn"
 position = "2,0"
 mode = "xplane"
+panel = "fcu"
 
 [[tiles]]
 type = "a320_fcu"
 control = "master_caut"
 position = "2,1"
 mode = "xplane"
+panel = "fcu"
 
 [[tiles]]
 type = "a320_fcu"
-control = "spd"
+control = "loc"
 position = "2,2"
 mode = "xplane"
-label = "SPD"
+panel = "fcu"
+label = "LOC"
 
 [[tiles]]
 type = "a320_fcu"
 control = "trk"
 position = "2,3"
 mode = "xplane"
+panel = "fcu"
 label = "FPA"
 
 [[tiles]]
@@ -160,7 +174,118 @@ type = "a320_fcu"
 control = "vs"
 position = "2,4"
 mode = "xplane"
+panel = "fcu"
 label = "V/S"
+
+# =============================================================================
+# Mode: "xplane" // PANEL 2: "apu" (Airbus Overhead Electrical, APU & Eng Prep)
+# =============================================================================
+# Row 0: MODE (0,0) | PANEL (0,1) | BAT 1 (0,2) | BAT 2 (0,3) | EXT PWR (0,4)
+[[tiles]]
+type = "a320_fcu"
+control = "bat1"
+position = "0,2"
+mode = "xplane"
+panel = "apu"
+label = "BAT 1"
+
+[[tiles]]
+type = "a320_fcu"
+control = "bat2"
+position = "0,3"
+mode = "xplane"
+panel = "apu"
+label = "BAT 2"
+
+[[tiles]]
+type = "a320_fcu"
+control = "ext_pwr"
+position = "0,4"
+mode = "xplane"
+panel = "apu"
+label = "EXT PWR"
+
+# Row 1: APU MST (1,0) | APU STR (1,1) | APU BLD (1,2) | APU GEN (1,3) | FUEL PMP (1,4)
+[[tiles]]
+type = "a320_fcu"
+control = "apu_master"
+position = "1,0"
+mode = "xplane"
+panel = "apu"
+label = "APU MST"
+
+[[tiles]]
+type = "a320_fcu"
+control = "apu_start"
+position = "1,1"
+mode = "xplane"
+panel = "apu"
+label = "APU STR"
+
+[[tiles]]
+type = "a320_fcu"
+control = "apu_bleed"
+position = "1,2"
+mode = "xplane"
+panel = "apu"
+label = "APU BLD"
+
+[[tiles]]
+type = "a320_fcu"
+control = "apu_gen"
+position = "1,3"
+mode = "xplane"
+panel = "apu"
+label = "APU GEN"
+
+[[tiles]]
+type = "a320_fcu"
+control = "fuel_pumps"
+position = "1,4"
+mode = "xplane"
+panel = "apu"
+label = "FUEL PMP"
+
+# Row 2: ENG MOD (2,0) | PACK 1/2 (2,1) | BEACON (2,2) | ECAM APU (2,3) | ECAM ENG (2,4)
+[[tiles]]
+type = "a320_fcu"
+control = "eng_mode"
+position = "2,0"
+mode = "xplane"
+panel = "apu"
+label = "ENG MOD"
+
+[[tiles]]
+type = "a320_fcu"
+control = "packs"
+position = "2,1"
+mode = "xplane"
+panel = "apu"
+label = "PACK 1/2"
+
+[[tiles]]
+type = "a320_fcu"
+control = "beacon"
+position = "2,2"
+mode = "xplane"
+panel = "apu"
+label = "BEACON"
+
+[[tiles]]
+type = "a320_fcu"
+control = "ecam_apu"
+position = "2,3"
+mode = "xplane"
+panel = "apu"
+label = "ECAM APU"
+
+[[tiles]]
+type = "a320_fcu"
+control = "ecam_eng"
+position = "2,4"
+mode = "xplane"
+panel = "apu"
+label = "ECAM ENG"
 "##;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -228,6 +353,7 @@ impl QDeckConfig {
     pub fn builtin_default() -> Self {
         toml::from_str(DEFAULT_CONFIG_TOML).unwrap_or_default()
     }
+
     /// Returns the ordered list of modes (always starting with `default_mode` or `"dashboard"`),
     /// including any additional modes referenced by tiles.
     pub fn effective_modes(&self) -> Vec<String> {
@@ -257,24 +383,60 @@ impl QDeckConfig {
         out
     }
 
-    /// Returns the active tile for `key_idx` in `active_mode`.
+    /// Returns the ordered list of sub-panels for a given `mode` (e.g. `["fcu", "apu"]` for `xplane`).
+    pub fn effective_panels(&self, active_mode: &str) -> Vec<String> {
+        let active_norm = active_mode.trim().to_ascii_lowercase();
+        let mut out: Vec<String> = Vec::new();
+        for tile in &self.tiles {
+            if tile.matches_mode(&active_norm, false) {
+                if let Some(p) = &tile.panel {
+                    let clean = p.trim().to_ascii_lowercase();
+                    if !clean.is_empty() && clean != "*" && clean != "all" && !out.contains(&clean)
+                    {
+                        out.push(clean);
+                    }
+                }
+            }
+        }
+        if out.is_empty() {
+            out.push("fcu".to_string());
+        }
+        out
+    }
+
+    /// Returns the active tile for `key_idx` in `(active_mode, active_panel)`.
     pub fn tile_for_key(
         &self,
         key_idx: u8,
         cols: u8,
         total_keys: u8,
         active_mode: &str,
+        active_panel: &str,
     ) -> Option<&TileConfig> {
         let active_norm = active_mode.trim().to_ascii_lowercase();
+        let panel_norm = active_panel.trim().to_ascii_lowercase();
+
+        // 1. Exact mode match + exact panel match
         if let Some(t) = self.tiles.iter().find(|t| {
             t.resolve_key(cols, total_keys) == Some(key_idx)
                 && t.matches_mode(&active_norm, false)
+                && t.matches_panel(&panel_norm, false)
         }) {
             return Some(t);
         }
-        self.tiles.iter().find(|t| {
+
+        // 2. Exact mode match + wildcard/shared panel (e.g. the panel toggle tile at 0,1)
+        if let Some(t) = self.tiles.iter().find(|t| {
             t.resolve_key(cols, total_keys) == Some(key_idx)
-                && t.matches_mode(&active_norm, true)
+                && t.matches_mode(&active_norm, false)
+                && t.matches_panel(&panel_norm, true)
+        }) {
+            return Some(t);
+        }
+
+        // 3. Global wildcard mode (e.g. the top-left mode selector at 0,0)
+        self.tiles.iter().find(|t| {
+            t.resolve_key(cols, total_keys) == Some(key_idx) && t.matches_mode(&active_norm, true)
         })
     }
 }
@@ -376,12 +538,14 @@ pub struct TileConfig {
     pub row: Option<u8>,
     /// Explicit 0-based column index
     pub col: Option<u8>,
-    /// Tile type: "mode", "cpu", "gpu", "memory", "a320_fcu", "ops_status", "launcher"
+    /// Tile type: "mode", "panel", "cpu", "gpu", "memory", "a320_fcu", "ops_status", "launcher"
     #[serde(rename = "type", alias = "widget", alias = "kind")]
     pub tile_type: String,
     /// Optional mode this tile belongs to (e.g. "dashboard", "xplane", or "*" for all modes)
     pub mode: Option<String>,
-    /// Optional A320 / X-Plane control identifier (e.g. "ap1", "ap2", "athr", "fd", "loc", "appr", "exped", "hdg", "alt", "spd", "trk", "vs", "master_warn", "master_caut")
+    /// Optional sub-panel within a mode (e.g. "fcu" vs "apu" in "xplane" mode)
+    pub panel: Option<String>,
+    /// Optional A320 / X-Plane control identifier
     pub control: Option<String>,
     /// Optional explicit X-Plane UDP command string (e.g. "sim/autopilot/servos_toggle")
     pub xplane_cmd: Option<String>,
@@ -401,6 +565,7 @@ pub struct TileConfig {
 #[derive(Debug, Clone)]
 pub enum ClickAction {
     CycleMode,
+    CyclePanel,
     XPlaneControl {
         control: String,
         custom_cmd: Option<String>,
@@ -416,6 +581,13 @@ impl TileConfig {
         matches!(
             self.tile_type.trim().to_ascii_lowercase().as_str(),
             "mode" | "mode_selector"
+        )
+    }
+
+    pub fn is_panel_selector(&self) -> bool {
+        matches!(
+            self.tile_type.trim().to_ascii_lowercase().as_str(),
+            "panel" | "panel_selector" | "submode"
         )
     }
 
@@ -443,10 +615,30 @@ impl TileConfig {
         }
     }
 
+    pub fn matches_panel(&self, active_panel: &str, wildcard_pass: bool) -> bool {
+        if self.is_panel_selector() {
+            return wildcard_pass;
+        }
+        match &self.panel {
+            Some(p) => {
+                let norm = p.trim().to_ascii_lowercase();
+                if norm == "*" || norm == "all" {
+                    wildcard_pass
+                } else {
+                    !wildcard_pass && norm == active_panel
+                }
+            }
+            None => wildcard_pass,
+        }
+    }
+
     /// Determines what action should happen when this tile is clicked on the Stream Deck.
     pub fn click_action(&self) -> ClickAction {
         if self.is_mode_selector() {
             return ClickAction::CycleMode;
+        }
+        if self.is_panel_selector() {
+            return ClickAction::CyclePanel;
         }
         if self.is_a320_fcu() || self.control.is_some() || self.xplane_cmd.is_some() {
             let ctrl = self

@@ -20,7 +20,7 @@ use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use widgets::{
     TelemetrySnapshot, render_a320_fcu_tile, render_cpu_tile, render_gpu_tile,
     render_launcher_tile, render_memory_tile, render_mode_tile, render_ops_status_tile,
-    render_standby_tile,
+    render_panel_tile, render_standby_tile,
 };
 use xplane::{A320FcuState, XPlaneClient};
 
@@ -244,9 +244,23 @@ fn render_key_to_deck(
     snapshot: &TelemetrySnapshot,
     is_highlighted: bool,
 ) -> Result<()> {
-    if let Some(tile) = cfg.tile_for_key(key_idx, cols, total_keys, snapshot.active_mode) {
+    if let Some(tile) = cfg.tile_for_key(
+        key_idx,
+        cols,
+        total_keys,
+        snapshot.active_mode,
+        snapshot.active_panel,
+    ) {
         let img = match tile.tile_type.trim().to_ascii_lowercase().as_str() {
             "mode" | "mode_selector" => render_mode_tile(
+                img_w as u32,
+                img_h as u32,
+                tile,
+                theme,
+                snapshot,
+                is_highlighted,
+            ),
+            "panel" | "panel_selector" | "submode" => render_panel_tile(
                 img_w as u32,
                 img_h as u32,
                 tile,
@@ -330,11 +344,18 @@ fn apply_mode_layout(
     let mut configured_keys = HashSet::new();
 
     for k in 0..total_keys {
-        if let Some(tile) = cfg.tile_for_key(k, cols, total_keys, snapshot.active_mode) {
+        if let Some(tile) = cfg.tile_for_key(
+            k,
+            cols,
+            total_keys,
+            snapshot.active_mode,
+            snapshot.active_panel,
+        ) {
             configured_keys.insert(k);
             println!(
-                "[QDECK] [mode={}] Key {} (row {}, col {}) -> '{}' (type='{}') | click={:?}",
+                "[QDECK] [mode={}/panel={}] Key {} (row {}, col {}) -> '{}' (type='{}') | click={:?}",
                 snapshot.active_mode,
+                snapshot.active_panel,
                 k,
                 k / cols,
                 k % cols,
@@ -379,6 +400,10 @@ fn build_snapshot<'a>(
     next_mode: &'a str,
     mode_index: usize,
     total_modes: usize,
+    active_panel: &'a str,
+    next_panel: &'a str,
+    panel_index: usize,
+    total_panels: usize,
     fcu: &'a A320FcuState,
     tick: u64,
     in_demo: bool,
@@ -428,6 +453,10 @@ fn build_snapshot<'a>(
         next_mode,
         mode_index,
         total_modes,
+        active_panel,
+        next_panel,
+        panel_index,
+        total_panels,
         fcu,
         tick,
         demo_mode_active: in_demo,
@@ -556,6 +585,7 @@ fn run_deck_session(
     theme: &mut ResolvedTheme,
     modes: &mut Vec<String>,
     mode_idx: &mut usize,
+    panel_idx: &mut usize,
     last_mtime: &mut Option<SystemTime>,
     xplane: &mut XPlaneClient,
     sys: &mut System,
@@ -603,6 +633,12 @@ fn run_deck_session(
         let total_modes = modes.len().max(1);
         let active_mode = &modes[*mode_idx];
         let next_mode = &modes[(*mode_idx + 1) % total_modes];
+        let panels = cfg.effective_panels(active_mode);
+        let total_panels = panels.len().max(1);
+        *panel_idx %= total_panels;
+        let active_panel = &panels[*panel_idx];
+        let next_panel = &panels[(*panel_idx + 1) % total_panels];
+
         let initial_snapshot = build_snapshot(
             sys,
             &mut core_buf,
@@ -612,6 +648,10 @@ fn run_deck_session(
             next_mode,
             *mode_idx,
             total_modes,
+            active_panel,
+            next_panel,
+            *panel_idx,
+            total_panels,
             &xplane.state,
             *tick,
             false,
@@ -650,6 +690,12 @@ fn run_deck_session(
                 let total_modes = modes.len().max(1);
                 let active_mode = &modes[*mode_idx];
                 let next_mode = &modes[(*mode_idx + 1) % total_modes];
+                let panels = cfg.effective_panels(active_mode);
+                let total_panels = panels.len().max(1);
+                *panel_idx %= total_panels;
+                let active_panel = &panels[*panel_idx];
+                let next_panel = &panels[(*panel_idx + 1) % total_panels];
+
                 let snapshot = build_snapshot(
                     sys,
                     &mut core_buf,
@@ -659,6 +705,10 @@ fn run_deck_session(
                     next_mode,
                     *mode_idx,
                     total_modes,
+                    active_panel,
+                    next_panel,
+                    *panel_idx,
+                    total_panels,
                     &xplane.state,
                     *tick,
                     false,
@@ -703,7 +753,7 @@ fn run_deck_session(
         };
 
         let mut newly_highlighted_keys: Vec<u8> = Vec::new();
-        let mut mode_switched = false;
+        let mut mode_or_panel_switched = false;
         let mut fcu_changed = false;
 
         match deck.read_buttons(Some(wait_duration)) {
@@ -716,21 +766,35 @@ fn run_deck_session(
                         highlight_until[k_idx] = Some(press_time + TAP_HIGHLIGHT_DURATION);
                         newly_highlighted_keys.push(key_u8);
                         let active_mode = &modes[*mode_idx];
-                        if let Some(tile) = cfg.tile_for_key(key_u8, cols, total_keys, active_mode)
+                        let panels = cfg.effective_panels(active_mode);
+                        let total_panels = panels.len().max(1);
+                        *panel_idx %= total_panels;
+                        let active_panel = &panels[*panel_idx];
+
+                        if let Some(tile) =
+                            cfg.tile_for_key(key_u8, cols, total_keys, active_mode, active_panel)
                         {
                             match tile.click_action() {
                                 ClickAction::CycleMode => {
                                     *mode_idx = (*mode_idx + 1) % modes.len().max(1);
                                     println!("[QDECK] Mode toggled -> '{}'", modes[*mode_idx]);
-                                    mode_switched = true;
+                                    mode_or_panel_switched = true;
+                                }
+                                ClickAction::CyclePanel => {
+                                    *panel_idx = (*panel_idx + 1) % total_panels;
+                                    println!(
+                                        "[QDECK] Panel toggled -> '{}/{}'",
+                                        active_mode, panels[*panel_idx]
+                                    );
+                                    mode_or_panel_switched = true;
                                 }
                                 ClickAction::XPlaneControl {
                                     control,
                                     custom_cmd,
                                 } => {
                                     println!(
-                                        "[QDECK] [X-Plane A320] Triggered FCU control '{}' -> UDP {}",
-                                        control, cfg.xplane_addr
+                                        "[QDECK] [X-Plane] Triggered control '{}' (panel='{}')",
+                                        control, active_panel
                                     );
                                     xplane.trigger_a320_control(&control, custom_cmd.as_deref());
                                     fcu_changed = true;
@@ -802,10 +866,16 @@ fn run_deck_session(
             demo_until = None;
         }
 
-        if mode_switched {
+        if mode_or_panel_switched {
             let total_modes = modes.len().max(1);
             let active_mode = &modes[*mode_idx];
             let next_mode = &modes[(*mode_idx + 1) % total_modes];
+            let panels = cfg.effective_panels(active_mode);
+            let total_panels = panels.len().max(1);
+            *panel_idx %= total_panels;
+            let active_panel = &panels[*panel_idx];
+            let next_panel = &panels[(*panel_idx + 1) % total_panels];
+
             let snapshot = build_snapshot(
                 sys,
                 &mut core_buf,
@@ -815,6 +885,10 @@ fn run_deck_session(
                 next_mode,
                 *mode_idx,
                 total_modes,
+                active_panel,
+                next_panel,
+                *panel_idx,
+                total_panels,
                 &xplane.state,
                 *tick,
                 in_demo,
@@ -833,6 +907,12 @@ fn run_deck_session(
             let total_modes = modes.len().max(1);
             let active_mode = &modes[*mode_idx];
             let next_mode = &modes[(*mode_idx + 1) % total_modes];
+            let panels = cfg.effective_panels(active_mode);
+            let total_panels = panels.len().max(1);
+            *panel_idx %= total_panels;
+            let active_panel = &panels[*panel_idx];
+            let next_panel = &panels[(*panel_idx + 1) % total_panels];
+
             let snapshot = build_snapshot(
                 sys,
                 &mut core_buf,
@@ -842,6 +922,10 @@ fn run_deck_session(
                 next_mode,
                 *mode_idx,
                 total_modes,
+                active_panel,
+                next_panel,
+                *panel_idx,
+                total_panels,
                 &xplane.state,
                 *tick,
                 in_demo,
@@ -849,7 +933,8 @@ fn run_deck_session(
 
             if fcu_changed {
                 for k in 0..total_keys {
-                    if let Some(t) = cfg.tile_for_key(k, cols, total_keys, active_mode) {
+                    if let Some(t) = cfg.tile_for_key(k, cols, total_keys, active_mode, active_panel)
+                    {
                         if t.is_a320_fcu() {
                             let is_hi = highlight_until
                                 .get(k as usize)
@@ -902,6 +987,12 @@ fn run_deck_session(
                         let total_modes = modes.len().max(1);
                         let active_mode = &modes[*mode_idx];
                         let next_mode = &modes[(*mode_idx + 1) % total_modes];
+                        let panels = cfg.effective_panels(active_mode);
+                        let total_panels = panels.len().max(1);
+                        *panel_idx %= total_panels;
+                        let active_panel = &panels[*panel_idx];
+                        let next_panel = &panels[(*panel_idx + 1) % total_panels];
+
                         let snapshot = build_snapshot(
                             sys,
                             &mut core_buf,
@@ -911,6 +1002,10 @@ fn run_deck_session(
                             next_mode,
                             *mode_idx,
                             total_modes,
+                            active_panel,
+                            next_panel,
+                            *panel_idx,
+                            total_panels,
                             &xplane.state,
                             *tick,
                             in_demo,
@@ -928,13 +1023,18 @@ fn run_deck_session(
             let total_modes = modes.len().max(1);
             let active_mode = &modes[*mode_idx];
             let next_mode = &modes[(*mode_idx + 1) % total_modes];
+            let panels = cfg.effective_panels(active_mode);
+            let total_panels = panels.len().max(1);
+            *panel_idx %= total_panels;
+            let active_panel = &panels[*panel_idx];
+            let next_panel = &panels[(*panel_idx + 1) % total_panels];
 
             let mut needs_cpu = false;
             let mut needs_gpu = false;
             let mut needs_mem = false;
             let mut needs_xplane = false;
             for k in 0..total_keys {
-                if let Some(t) = cfg.tile_for_key(k, cols, total_keys, active_mode) {
+                if let Some(t) = cfg.tile_for_key(k, cols, total_keys, active_mode, active_panel) {
                     match t.tile_type.trim().to_ascii_lowercase().as_str() {
                         "cpu" => needs_cpu = true,
                         "gpu" => needs_gpu = true,
@@ -962,7 +1062,7 @@ fn run_deck_session(
             }
             if needs_xplane {
                 xplane.ensure_subscribed();
-                xplane.poll_incoming();
+                xplane.poll_incoming(active_panel);
             }
 
             let snapshot = build_snapshot(
@@ -974,13 +1074,18 @@ fn run_deck_session(
                 next_mode,
                 *mode_idx,
                 total_modes,
+                active_panel,
+                next_panel,
+                *panel_idx,
+                total_panels,
                 &xplane.state,
                 *tick,
                 in_demo,
             );
 
             for k in 0..total_keys {
-                if let Some(tile) = cfg.tile_for_key(k, cols, total_keys, active_mode) {
+                if let Some(tile) = cfg.tile_for_key(k, cols, total_keys, active_mode, active_panel)
+                {
                     if is_dynamic_telemetry_tile(&tile.tile_type) {
                         let is_hi = highlight_until
                             .get(k as usize)
@@ -1046,6 +1151,7 @@ fn main() -> Result<()> {
         .iter()
         .position(|m| m.eq_ignore_ascii_case(&cfg.default_mode))
         .unwrap_or(0);
+    let mut panel_idx: usize = 0;
     let mut last_mtime = file_mtime(&cfg_path);
 
     println!("====================================================");
@@ -1082,6 +1188,7 @@ fn main() -> Result<()> {
                     &mut theme,
                     &mut modes,
                     &mut mode_idx,
+                    &mut panel_idx,
                     &mut last_mtime,
                     &mut xplane,
                     &mut sys,

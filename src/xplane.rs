@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct A320FcuState {
+    // Panel 1: FCU / Autopilot
     pub fd_on: bool,
     pub ap1_on: bool,
     pub ap2_on: bool,
@@ -22,6 +23,24 @@ pub struct A320FcuState {
     pub alt_ft: f32,
     pub spd_kts: f32,
     pub vs_fpm: f32,
+
+    // Panel 2: Overhead Electrical, APU & Engine Start Prep
+    pub bat1_on: bool,
+    pub bat2_on: bool,
+    pub ext_pwr_on: bool,
+    pub apu_master_on: bool,
+    pub apu_start_on: bool,
+    pub apu_avail: bool,
+    pub apu_n1_pct: f32,
+    pub apu_bleed_on: bool,
+    pub apu_gen_on: bool,
+    pub fuel_pumps_on: bool,
+    pub packs_on: bool,
+    pub beacon_on: bool,
+    /// Engine Mode Selector: -1 = CRANK, 0 = NORM, 1 = IGN/START
+    pub eng_mode: i8,
+    pub ecam_page: &'static str,
+
     pub last_rx: Option<Instant>,
 }
 
@@ -45,6 +64,20 @@ impl Default for A320FcuState {
             alt_ft: 15000.0,
             spd_kts: 250.0,
             vs_fpm: 0.0,
+            bat1_on: false,
+            bat2_on: false,
+            ext_pwr_on: false,
+            apu_master_on: false,
+            apu_start_on: false,
+            apu_avail: false,
+            apu_n1_pct: 0.0,
+            apu_bleed_on: false,
+            apu_gen_on: true,
+            fuel_pumps_on: false,
+            packs_on: true,
+            beacon_on: false,
+            eng_mode: 0,
+            ecam_page: "APU",
             last_rx: None,
         }
     }
@@ -71,6 +104,18 @@ const DREF_TOLISS_APPR: i32 = 24;
 const DREF_TOLISS_EXPED: i32 = 25;
 const DREF_A333_HDG_OPEN: i32 = 30;
 
+// Panel 2 Dataref IDs
+const DREF_APU_N1: i32 = 40;
+const DREF_APU_MASTER: i32 = 41;
+const DREF_APU_START: i32 = 42;
+const DREF_APU_AVAIL: i32 = 43;
+const DREF_APU_BLEED: i32 = 44;
+const DREF_BAT1: i32 = 45;
+const DREF_BAT2: i32 = 46;
+const DREF_FUEL_PUMP: i32 = 47;
+const DREF_ENG_MODE: i32 = 48;
+const DREF_BEACON: i32 = 49;
+
 const WEB_API_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 8086);
 
 fn extract_json_u64_id(json: &str) -> Option<u64> {
@@ -90,7 +135,9 @@ fn extract_json_f32_data(json: &str) -> Option<f32> {
     let num_str: String = after
         .trim_start()
         .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+' || *c == 'e' || *c == 'E')
+        .take_while(|c| {
+            c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+' || *c == 'e' || *c == 'E'
+        })
         .collect();
     num_str.parse::<f32>().ok()
 }
@@ -235,7 +282,7 @@ impl XPlaneClient {
         let _ = sock.send_to(&pkt, &self.target_addr);
     }
 
-    /// Subscribes to standard X-Plane + ToLiss/AirbusFBW A320 FCU datarefs at 2 Hz.
+    /// Subscribes to standard X-Plane + ToLiss/AirbusFBW A320 FCU & APU datarefs at 2 Hz.
     pub fn ensure_subscribed(&mut self) {
         let is_live = self
             .state
@@ -257,7 +304,10 @@ impl XPlaneClient {
             (DREF_SIM_ATHR, "sim/cockpit2/autopilot/autothrottle_enabled"),
             (DREF_SIM_LOC, "sim/cockpit2/autopilot/nav_status"),
             (DREF_SIM_APPR, "sim/cockpit2/autopilot/approach_status"),
-            (DREF_SIM_HDG, "sim/cockpit2/autopilot/heading_dial_deg_mag_pilot"),
+            (
+                DREF_SIM_HDG,
+                "sim/cockpit2/autopilot/heading_dial_deg_mag_pilot",
+            ),
             (DREF_SIM_ALT, "sim/cockpit2/autopilot/altitude_dial_ft"),
             (DREF_SIM_SPD, "sim/cockpit2/autopilot/airspeed_dial_kts_mach"),
             (DREF_SIM_VS, "sim/cockpit2/autopilot/vvi_dial_fpm"),
@@ -269,6 +319,7 @@ impl XPlaneClient {
             (DREF_TOLISS_LOC, "AirbusFBW/LOCilluminated"),
             (DREF_TOLISS_APPR, "AirbusFBW/APPRilluminated"),
             (DREF_TOLISS_EXPED, "AirbusFBW/EXPEDilluminated"),
+            (DREF_APU_N1, "sim/cockpit2/electrical/APU_N1_percent"),
         ];
 
         for (id, path) in subs {
@@ -277,8 +328,8 @@ impl XPlaneClient {
     }
 
     /// Drains any incoming `RREF` UDP packets OR polls X-Plane 12's Local WebAPI (`127.0.0.1:8086`)
-    /// and updates `self.state`.
-    pub fn poll_incoming(&mut self) {
+    /// for the active panel (`"fcu"` or `"apu"`) and updates `self.state`.
+    pub fn poll_incoming(&mut self, active_panel: &str) {
         let mut got_udp = false;
         if let Some(ref sock) = self.socket {
             let mut buf = [0u8; 2048];
@@ -313,7 +364,7 @@ impl XPlaneClient {
         }
 
         if !got_udp {
-            let web_drefs = [
+            let fcu_drefs: &[(i32, &str)] = &[
                 (DREF_SIM_FD, "sim/cockpit2/autopilot/flight_director_mode"),
                 (DREF_SIM_AP1, "sim/cockpit2/autopilot/servos_on"),
                 (DREF_SIM_AP2, "sim/cockpit2/autopilot/servos2_on"),
@@ -333,7 +384,29 @@ impl XPlaneClient {
                 (DREF_A333_HDG_OPEN, "laminar/A333/autopilot/hdg_window_open"),
             ];
 
-            for (key_id, dref_name) in web_drefs {
+            let apu_drefs: &[(i32, &str)] = &[
+                (DREF_APU_N1, "sim/cockpit2/electrical/APU_N1_percent"),
+                (DREF_APU_MASTER, "laminar/A333/annun/apu_master_on"),
+                (DREF_APU_START, "laminar/A333/annun/apu_start_on"),
+                (DREF_APU_AVAIL, "laminar/A333/annun/apu_avail"),
+                (DREF_APU_BLEED, "laminar/A333/annun/apu_bleed_on"),
+                (DREF_BAT1, "laminar/A333/buttons/batt1_ctct_on_off"),
+                (DREF_BAT2, "laminar/A333/buttons/batt2_ctct_on_off"),
+                (DREF_FUEL_PUMP, "laminar/A333/fuel/buttons/left1_pump_pos"),
+                (
+                    DREF_ENG_MODE,
+                    "sim/cockpit2/engine/actuators/eng_mode_selector",
+                ),
+                (DREF_BEACON, "sim/cockpit2/switches/beacon_on"),
+            ];
+
+            let list = if active_panel.eq_ignore_ascii_case("apu") {
+                apu_drefs
+            } else {
+                fcu_drefs
+            };
+
+            for &(key_id, dref_name) in list {
                 let Some(web_id) = self.resolve_web_dref_id(dref_name) else {
                     if self.web_api_backoff_until.is_some_and(|u| Instant::now() < u) {
                         break;
@@ -382,12 +455,28 @@ impl XPlaneClient {
             DREF_SIM_VS => state.vs_fpm = val,
             DREF_SIM_WARN if changed => state.master_warn = val > 0.5,
             DREF_SIM_CAUT if changed => state.master_caut = val > 0.5,
+            // Panel 2 (APU / Overhead / Eng Mode)
+            DREF_APU_N1 => {
+                state.apu_n1_pct = val.clamp(0.0, 100.0);
+                if state.apu_n1_pct >= 95.0 {
+                    state.apu_avail = true;
+                    state.apu_start_on = false;
+                }
+            }
+            DREF_APU_MASTER if changed => state.apu_master_on = val > 0.1,
+            DREF_APU_START if changed => state.apu_start_on = val > 0.1,
+            DREF_APU_AVAIL if changed => state.apu_avail = val > 0.1,
+            DREF_APU_BLEED if changed => state.apu_bleed_on = val > 0.1,
+            DREF_BAT1 if changed => state.bat1_on = val > 0.5,
+            DREF_BAT2 if changed => state.bat2_on = val > 0.5,
+            DREF_FUEL_PUMP if changed => state.fuel_pumps_on = val > 0.5,
+            DREF_ENG_MODE if changed => state.eng_mode = val.round() as i8,
+            DREF_BEACON if changed => state.beacon_on = val > 0.5,
             _ => {}
         }
     }
 
-    /// Executes an Airbus A320/A330 FCU control press: sends standard X-Plane, Laminar Airbus,
-    /// and AirbusFBW/ToLiss commands via WebAPI (`127.0.0.1:8086`) + UDP (`127.0.0.1:49000`).
+    /// Executes an Airbus A320/A330 FCU or Overhead APU/Start control press via WebAPI + UDP.
     pub fn trigger_a320_control(&mut self, control_name: &str, custom_cmd: Option<&str>) {
         if let Some(cmd) = custom_cmd {
             if !cmd.trim().is_empty() {
@@ -402,6 +491,7 @@ impl XPlaneClient {
 
         let norm = control_name.trim().to_ascii_lowercase();
         match norm.as_str() {
+            // --- PANEL 1: FCU / Autopilot ---
             "ap1" | "ap_1" => {
                 self.send_command("sim/autopilot/servos_toggle");
                 self.send_command("toliss_airbus/ap1_push");
@@ -515,6 +605,106 @@ impl XPlaneClient {
                 self.send_command("sim/annunciator/clear_master_caution");
                 self.send_command("AirbusFBW/CaptCautPush");
                 self.state.master_caut = false;
+            }
+
+            // --- PANEL 2: Overhead Electrical, APU & Engine Start Prep ---
+            "bat1" | "battery1" => {
+                self.send_command("sim/electrical/battery_1_toggle");
+                self.send_command("AirbusFBW/Bat1Toggle");
+                self.state.bat1_on = !self.state.bat1_on;
+            }
+            "bat2" | "battery2" => {
+                self.send_command("sim/electrical/battery_2_toggle");
+                self.send_command("laminar/A333/buttons/APU_batt_toggle");
+                self.send_command("AirbusFBW/Bat2Toggle");
+                self.state.bat2_on = !self.state.bat2_on;
+            }
+            "ext_pwr" | "external_power" | "gpu" => {
+                self.send_command("laminar/A333/buttons/external_powerA_toggle");
+                self.send_command("sim/electrical/gpu_toggle");
+                self.send_command("AirbusFBW/ExtPwrToggle");
+                self.state.ext_pwr_on = !self.state.ext_pwr_on;
+            }
+            "apu_master" | "apu_mst" => {
+                self.send_command("laminar/A333/buttons/APU_master");
+                if self.state.apu_master_on {
+                    self.send_command("sim/electrical/APU_off");
+                } else {
+                    self.send_command("sim/electrical/APU_on");
+                }
+                self.send_command("AirbusFBW/APUMaster");
+                self.state.apu_master_on = !self.state.apu_master_on;
+                if !self.state.apu_master_on {
+                    self.state.apu_start_on = false;
+                    self.state.apu_avail = false;
+                }
+            }
+            "apu_start" | "apu_str" => {
+                self.send_command("laminar/A333/buttons/APU_start");
+                self.send_command("sim/electrical/APU_start");
+                self.send_command("AirbusFBW/APUStarter");
+                if !self.state.apu_avail {
+                    self.state.apu_master_on = true;
+                    self.state.apu_start_on = true;
+                }
+            }
+            "apu_bleed" | "apu_bld" => {
+                self.send_command("sim/bleed_air/apu_toggle");
+                self.send_command("AirbusFBW/APUBleedSwitch");
+                self.state.apu_bleed_on = !self.state.apu_bleed_on;
+            }
+            "apu_gen" => {
+                self.send_command("laminar/A333/buttons/APU_gen_toggle");
+                self.send_command("sim/electrical/APU_generator_toggle");
+                self.state.apu_gen_on = !self.state.apu_gen_on;
+            }
+            "fuel_pumps" | "fuel" | "pumps" => {
+                for pump_cmd in [
+                    "laminar/A333/switches/left1_pump_toggle",
+                    "laminar/A333/switches/left2_pump_toggle",
+                    "laminar/A333/switches/right1_pump_toggle",
+                    "laminar/A333/switches/right2_pump_toggle",
+                    "laminar/A333/switches/center_left_pump_toggle",
+                    "laminar/A333/switches/center_right_pump_toggle",
+                ] {
+                    self.send_command(pump_cmd);
+                }
+                self.state.fuel_pumps_on = !self.state.fuel_pumps_on;
+            }
+            "eng_mode" | "ign_start" => {
+                // Cycle: NORM (0) -> IGN/START (1) -> CRANK (-1) -> NORM (0)
+                match self.state.eng_mode {
+                    0 => {
+                        self.send_command("laminar/A333/switch/eng_mode_right");
+                        self.state.eng_mode = 1;
+                    }
+                    1 => {
+                        self.send_command("laminar/A333/switch/eng_mode_left");
+                        self.send_command("laminar/A333/switch/eng_mode_left");
+                        self.state.eng_mode = -1;
+                    }
+                    _ => {
+                        self.send_command("laminar/A333/switch/eng_mode_right");
+                        self.state.eng_mode = 0;
+                    }
+                }
+            }
+            "packs" | "pack" => {
+                self.send_command("sim/bleed_air/pack_left_toggle");
+                self.send_command("sim/bleed_air/pack_right_toggle");
+                self.state.packs_on = !self.state.packs_on;
+            }
+            "beacon" => {
+                self.send_command("sim/lights/beacon_lights_toggle");
+                self.state.beacon_on = !self.state.beacon_on;
+            }
+            "ecam_apu" => {
+                self.send_command("laminar/A333/button/ecam/apu_mode");
+                self.state.ecam_page = "APU";
+            }
+            "ecam_eng" => {
+                self.send_command("laminar/A333/button/ecam/eng_mode");
+                self.state.ecam_page = "ENG";
             }
             other => {
                 if custom_cmd.is_none() && !other.is_empty() {

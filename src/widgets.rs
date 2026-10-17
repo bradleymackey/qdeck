@@ -19,12 +19,16 @@ pub struct TelemetrySnapshot<'a> {
     pub next_mode: &'a str,
     pub mode_index: usize,
     pub total_modes: usize,
+    pub active_panel: &'a str,
+    pub next_panel: &'a str,
+    pub panel_index: usize,
+    pub total_panels: usize,
     pub fcu: &'a A320FcuState,
     pub tick: u64,
     pub demo_mode_active: bool,
 }
 
-/// Renders the top-left Mode Selector tile showing the active mode (e.g. DASHBOARD / GAMING).
+/// Renders the top-left Mode Selector tile showing the active mode (e.g. DASHBOARD / XPLANE).
 pub fn render_mode_tile(
     width: u32,
     height: u32,
@@ -97,6 +101,90 @@ pub fn render_mode_tile(
     // Footer showing next mode on click
     let next_upper: String = telemetry
         .next_mode
+        .to_ascii_uppercase()
+        .chars()
+        .take(11)
+        .collect();
+    let next_str = format!(">{}", next_upper);
+    let nw = (next_str.len() as i32) * 4 - 1;
+    draw_text_3x5(
+        &mut img,
+        ((w - nw) / 2).max(5),
+        h - 10,
+        &next_str,
+        1,
+        theme.phosphor_dim,
+    );
+
+    img
+}
+
+/// Renders the secondary Panel Selector tile (e.g. toggling between Panel 1 "FCU" and Panel 2 "APU").
+pub fn render_panel_tile(
+    width: u32,
+    height: u32,
+    tile: &TileConfig,
+    theme: &ResolvedTheme,
+    telemetry: &TelemetrySnapshot,
+    is_highlighted: bool,
+) -> RgbImage {
+    let w = width as i32;
+    let h = height as i32;
+    let bg = if is_highlighted {
+        scale_color(theme.amber, 0.22)
+    } else {
+        theme.background
+    };
+    let mut img = RgbImage::from_pixel(width, height, bg);
+
+    if is_highlighted {
+        draw_rect_border(&mut img, 0, 0, w, h, 2, theme.amber);
+    }
+
+    let label = tile.label.as_deref().unwrap_or("PANEL");
+    draw_text_5x7(&mut img, 5, 5, label, 1, theme.phosphor_dim);
+
+    let idx_text = format!(
+        "{}/{}",
+        telemetry.panel_index + 1,
+        telemetry.total_panels.max(1)
+    );
+    let idx_w = (idx_text.len() as i32) * 4 - 1;
+    draw_text_3x5(&mut img, w - 5 - idx_w, 6, &idx_text, 1, theme.phosphor_dim);
+
+    let panel_upper = telemetry.active_panel.to_ascii_uppercase();
+    let accent = if panel_upper == "APU" {
+        theme.amber
+    } else {
+        theme.phosphor_green
+    };
+
+    let box_y = 21;
+    let box_h = 23;
+    fill_rect(&mut img, 4, box_y, w - 8, box_h, scale_color(accent, 0.12));
+    draw_rect_border(&mut img, 4, box_y, w - 8, box_h, 1, accent);
+
+    let tw = text_width_5x7(&panel_upper, 1);
+    let tx = ((w - tw) / 2).max(6);
+    draw_text_5x7(&mut img, tx, box_y + 8, &panel_upper, 1, accent);
+
+    let n_panels = telemetry.total_panels.clamp(1, 8) as i32;
+    let pip_w = 8;
+    let pip_gap = 4;
+    let pips_total_w = n_panels * pip_w + (n_panels - 1) * pip_gap;
+    let pip_start_x = (w - pips_total_w) / 2;
+    for p in 0..n_panels {
+        let px = pip_start_x + p * (pip_w + pip_gap);
+        let col = if (p as usize) == telemetry.panel_index {
+            accent
+        } else {
+            scale_color(theme.phosphor_dim, 0.30)
+        };
+        fill_rect(&mut img, px, 50, pip_w, 3, col);
+    }
+
+    let next_upper: String = telemetry
+        .next_panel
         .to_ascii_uppercase()
         .chars()
         .take(11)
@@ -709,6 +797,124 @@ pub fn render_a320_fcu_tile(
             let sub = if is_managed { "MANAGED" } else { "SELECTED" };
             let sw = (sub.len() as i32) * 4 - 1;
             draw_text_3x5(&mut img, (w - sw) / 2, h - 13, sub, 1, theme.phosphor_dim);
+        }
+
+        // --- Airbus Overhead APU Start Korry Pushbutton (AVAIL / START + N%) ---
+        "apu_start" | "apu_str" => {
+            let label = tile.label.as_deref().unwrap_or("APU STR");
+            let (top_str, top_col, border_col) = if fcu.apu_avail {
+                ("AVAIL".to_string(), theme.phosphor_green, theme.phosphor_green)
+            } else if fcu.apu_start_on || fcu.apu_n1_pct > 1.0 {
+                let s = if fcu.apu_n1_pct > 1.0 {
+                    format!("N {:>2.0}%", fcu.apu_n1_pct.clamp(0.0, 100.0))
+                } else {
+                    "START".to_string()
+                };
+                (s, theme.amber, theme.amber)
+            } else {
+                ("OFF".to_string(), scale_color(theme.phosphor_dim, 0.45), theme.grid_dim)
+            };
+
+            draw_rect_border(&mut img, 4, 4, w - 8, h - 8, 1, border_col);
+            draw_hline(&mut img, 5, 33, w - 10, theme.grid_dim);
+
+            if fcu.apu_avail || fcu.apu_start_on {
+                fill_rect(&mut img, 8, 8, w - 16, 21, scale_color(top_col, 0.14));
+                draw_rect_border(&mut img, 8, 8, w - 16, 21, 1, scale_color(top_col, 0.65));
+            }
+            let tw = text_width_5x7(&top_str, 1);
+            draw_text_5x7(&mut img, ((w - tw) / 2).max(6), 15, &top_str, 1, top_col);
+
+            let lw = text_width_5x7(label, 1);
+            let leg_col = if fcu.apu_avail {
+                theme.phosphor_green
+            } else if fcu.apu_start_on {
+                theme.amber
+            } else {
+                theme.phosphor_dim
+            };
+            draw_text_5x7(&mut img, ((w - lw) / 2).max(5), 46, label, 1, leg_col);
+        }
+
+        // --- Airbus Pedestal Engine Mode Selector (NORM / IGN-STR / CRANK) ---
+        "eng_mode" | "ign_start" => {
+            let label = tile.label.as_deref().unwrap_or("ENG MOD");
+            let (mode_str, main_col, sub_str) = match fcu.eng_mode {
+                1 => ("IGN/STR", theme.amber, "START MODE"),
+                -1 => ("CRANK", theme.amber, "DRY CRANK"),
+                _ => ("NORM", theme.phosphor_green, "NORMAL"),
+            };
+
+            draw_rect_border(&mut img, 3, 3, w - 6, h - 6, 1, theme.grid_dim);
+            draw_text_5x7(&mut img, 6, 7, label, 1, theme.phosphor_dim);
+
+            fill_rect(&mut img, 6, 22, w - 12, 25, scale_color(main_col, 0.12));
+            draw_rect_border(&mut img, 6, 22, w - 12, 25, 1, scale_color(main_col, 0.55));
+
+            let vw = text_width_5x7(mode_str, 1);
+            draw_text_5x7(&mut img, ((w - vw) / 2).max(6), 31, mode_str, 1, main_col);
+
+            let sw = (sub_str.len() as i32) * 4 - 1;
+            draw_text_3x5(&mut img, (w - sw) / 2, h - 13, sub_str, 1, theme.phosphor_dim);
+        }
+
+        // --- Airbus Overhead 2-Window Korry Switches (BAT 1/2, EXT PWR, APU MST/BLD/GEN, FUEL, PACKS, BEACON, ECAM) ---
+        "bat1" | "battery1" | "bat2" | "battery2" | "ext_pwr" | "external_power" | "gpu"
+        | "apu_master" | "apu_mst" | "apu_bleed" | "apu_bld" | "apu_gen" | "fuel_pumps"
+        | "fuel" | "pumps" | "packs" | "pack" | "beacon" | "ecam_apu" | "ecam_eng" => {
+            let (default_label, is_on, top_on_txt, top_off_txt) = match ctrl.as_str() {
+                "bat1" | "battery1" => ("BAT 1", fcu.bat1_on, "ON", "OFF"),
+                "bat2" | "battery2" => ("BAT 2", fcu.bat2_on, "ON", "OFF"),
+                "ext_pwr" | "external_power" | "gpu" => ("EXT PWR", fcu.ext_pwr_on, "ON", "AVAIL"),
+                "apu_master" | "apu_mst" => ("APU MST", fcu.apu_master_on, "ON", "OFF"),
+                "apu_bleed" | "apu_bld" => ("APU BLD", fcu.apu_bleed_on, "ON", "OFF"),
+                "apu_gen" => ("APU GEN", fcu.apu_gen_on, "ON", "OFF"),
+                "fuel_pumps" | "fuel" | "pumps" => ("FUEL PMP", fcu.fuel_pumps_on, "ON", "OFF"),
+                "packs" | "pack" => ("PACK 1/2", fcu.packs_on, "ON", "OFF"),
+                "beacon" => ("BEACON", fcu.beacon_on, "ON", "OFF"),
+                "ecam_apu" => ("ECAM APU", fcu.ecam_page == "APU", "PAGE", "ECAM"),
+                "ecam_eng" => ("ECAM ENG", fcu.ecam_page == "ENG", "PAGE", "ECAM"),
+                _ => ("OVHD", false, "ON", "OFF"),
+            };
+
+            let label = tile.label.as_deref().unwrap_or(default_label);
+            let outer_col = if is_on {
+                scale_color(theme.phosphor_green, 0.65)
+            } else {
+                theme.grid_dim
+            };
+
+            draw_rect_border(&mut img, 4, 4, w - 8, h - 8, 1, outer_col);
+            draw_hline(&mut img, 5, 33, w - 10, theme.grid_dim);
+
+            let top_txt = if is_on { top_on_txt } else { top_off_txt };
+            let top_col = if is_on {
+                theme.phosphor_green
+            } else if top_off_txt == "AVAIL" {
+                theme.amber
+            } else {
+                scale_color(theme.phosphor_dim, 0.45)
+            };
+
+            if is_on {
+                fill_rect(&mut img, 10, 9, w - 20, 19, scale_color(top_col, 0.14));
+                draw_rect_border(&mut img, 10, 9, w - 20, 19, 1, scale_color(top_col, 0.60));
+            }
+            let tw = text_width_5x7(top_txt, 1);
+            draw_text_5x7(&mut img, ((w - tw) / 2).max(6), 15, top_txt, 1, top_col);
+
+            let legend_col = if is_on {
+                theme.phosphor_green
+            } else {
+                theme.phosphor_dim
+            };
+            if label.len() <= 8 {
+                let lw = text_width_5x7(label, 1);
+                draw_text_5x7(&mut img, ((w - lw) / 2).max(5), 46, label, 1, legend_col);
+            } else {
+                let lw = (label.len() as i32) * 4 - 1;
+                draw_text_3x5(&mut img, ((w - lw) / 2).max(5), 48, label, 1, legend_col);
+            }
         }
 
         // --- Classic Airbus A320 Korry 3-Bar Pushbuttons (AP 1, AP 2, A/THR, FD, LOC, EXPED, APPR) ---
