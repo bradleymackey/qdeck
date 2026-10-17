@@ -9,8 +9,10 @@ A tactical, phosphor-green operations-center controller for the **Elgato Stream 
 ## Features
 
 - **Tactical Phosphor CRT Aesthetic**: Custom `5×7` and `3×5` bitmap fonts (`src/font/`) and crisp cockpit vector icons (`src/widgets/icons.rs`) rendered in phosphor green (`#00FF66`), caution/selected amber (`#FFB000`), and master-warning red (`#FF3333`) on a deep `#060A08` background.
-- **System Telemetry Dashboard (`root` page)**:
-  - Live CPU, Memory, Swap, GPU utilization, Disk capacity, Battery/Thermal state, Process count, Clock, Uptime, and Network RX/TX throughput with rolling sparklines.
+- **System Telemetry & AI Quota Dashboard (`dashboard` mode)**:
+  - Live CPU per-core bar graph and GPU core-grid utilization tiles (`0,3` and `0,4`).
+  - **Claude Usage Limits (`1,3` / Tile `09`)**: Displays both 5-hour Session (`SES`) and 7-day Weekly (`WK`) utilization percentages and 15-segment progress bars via Anthropic's OAuth usage API.
+  - **Google Gemini Usage Limits (`1,4` / Tile `10`)**: Displays both Session (`SES` Flash 5h) and Weekly (`WK` Argon/Pro 7d) utilization percentages and 15-segment progress bars via the local Antigravity language server (`GetUserStatus`).
 - **4-Panel Airbus Cockpit Integration for X-Plane 12 (`xplane` page)**:
   - **Key `#1` (`BACK`)**: Returns to the `root` system telemetry page.
   - **Key `#2` (`PNL <ACTIVE> / NEXT: <NEXT>`)**: Cycles through 4 Airbus sub-panels across Keys `3–15`:
@@ -53,7 +55,6 @@ qdeck/
 ├── src/
 │   ├── lib.rs                # Library crate root exporting modules
 │   ├── main.rs               # Binary entrypoint, CLI flags, signal handling
-│   ├── telemetry.rs          # macOS CPU, RAM, GPU, Network, Disk, Battery collectors
 │   ├── config/
 │   │   ├── mod.rs            # Config loader (~/.config/qdeck/config.toml) & tile lookup
 │   │   ├── defaults.rs       # Initial default config template for ~/.config/qdeck/config.toml
@@ -73,11 +74,15 @@ qdeck/
 │   │   ├── lock.rs           # CoreGraphics / IOKit screen-lock & display-sleep detection
 │   │   ├── service.rs        # launchd LaunchAgent plist generation & installer
 │   │   └── signals.rs        # POSIX SIGINT/SIGTERM/SIGHUP shutdown flag handling
+│   ├── telemetry/
+│   │   ├── mod.rs            # macOS CPU, RAM, GPU collectors & TelemetrySnapshot builder
+│   │   └── ai_limits.rs      # Background Claude & Google Gemini session/weekly quota poller
 │   ├── widgets/
-│   │   ├── mod.rs            # Tile dispatcher (system, navigation, Airbus controls)
+│   │   ├── mod.rs            # Tile dispatcher (system, AI limits, navigation, Airbus controls)
+│   │   ├── ai_limits.rs      # Dual-bar Session (SES) & Weekly (WK) Claude/Gemini tiles
 │   │   ├── icons.rs          # Cockpit vector icons (arrows, brake, fan, spoiler, notches)
 │   │   ├── navigation.rs     # Mode selector and sub-panel switcher tiles
-│   │   ├── system.rs         # System telemetry tiles & sparklines
+│   │   ├── system.rs         # System telemetry tiles (CPU, GPU, Memory, Ops Status)
 │   │   └── airbus/
 │   │       ├── mod.rs        # Airbus tile dispatcher
 │   │       ├── fcu.rs        # Glare-shield Master Warn/Caut & FCU digital LCD windows

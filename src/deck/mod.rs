@@ -7,7 +7,9 @@ pub use render::{apply_mode_layout, render_key_to_deck};
 
 use crate::config::{QDeckConfig, ResolvedTheme};
 use crate::macos::{is_macos_screen_locked_or_asleep, is_shutdown_requested};
-use crate::telemetry::{build_snapshot, is_dynamic_telemetry_tile, query_macos_gpu_stats};
+use crate::telemetry::{
+    build_snapshot, current_ai_limits, is_dynamic_telemetry_tile, query_macos_gpu_stats,
+};
 use crate::widgets::TelemetrySnapshot;
 use crate::xplane::{A320FcuState, XPlaneClient};
 use anyhow::{Result, anyhow};
@@ -66,11 +68,14 @@ impl ActiveLayout {
         tick: u64,
         in_demo: bool,
     ) -> TelemetrySnapshot<'a> {
+        let ai_limits = current_ai_limits();
         build_snapshot(
             sys,
             core_buf,
             gpu_cores,
             live_gpu_pct,
+            ai_limits.claude,
+            ai_limits.gemini,
             &self.active_mode,
             &self.next_mode,
             mode_idx,

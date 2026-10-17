@@ -1,4 +1,5 @@
 use crate::config::{ClickAction, QDeckConfig};
+use crate::telemetry::request_ai_limits_refresh;
 use crate::xplane::XPlaneClient;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -44,6 +45,13 @@ pub(super) fn process_button_edges(
             if let Some(tile) =
                 cfg.tile_for_key(key_u8, cols, total_keys, active_mode, active_panel)
             {
+                if matches!(
+                    tile.tile_type.trim().to_ascii_lowercase().as_str(),
+                    "claude" | "claude_limits" | "gemini" | "gemini_limits"
+                ) {
+                    request_ai_limits_refresh();
+                }
+
                 match tile.click_action() {
                     ClickAction::CycleMode => {
                         *mode_idx = (*mode_idx + 1) % modes.len().max(1);

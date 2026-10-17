@@ -11,9 +11,9 @@ This file documents the architectural conventions, hardware rules, cockpit desig
   - Place all domain logic inside the library crate ([`src/lib.rs`](src/lib.rs)) organized into focused sub-modules:
     - [`src/config/`](src/config/) — TOML schema (`mod.rs`), theme resolution (`theme.rs`), default config template (`defaults.rs`), and tile/sub-panel matching (`tile.rs`).
     - [`src/xplane/`](src/xplane/) — X-Plane 12 client coordinator (`mod.rs`), Local WebAPI client (`webapi.rs`), state & dataref tables (`state/{mod.rs, datarefs.rs}`), and per-panel command dispatchers (`commands/{mod.rs, fcu.rs, apu.rs, flt.rs, sys.rs}`).
-    - [`src/widgets/`](src/widgets/) — Tile rendering split across [`system.rs`](src/widgets/system.rs), [`navigation.rs`](src/widgets/navigation.rs), [`icons.rs`](src/widgets/icons.rs), and Airbus cockpit submodules in [`src/widgets/airbus/`](src/widgets/airbus/) (`mod.rs`, `fcu.rs`, `apu.rs`, `surfaces.rs`, `brakes.rs`, `korry.rs`).
+    - [`src/widgets/`](src/widgets/) — Tile rendering split across [`system.rs`](src/widgets/system.rs), [`ai_limits.rs`](src/widgets/ai_limits.rs), [`navigation.rs`](src/widgets/navigation.rs), [`icons.rs`](src/widgets/icons.rs), and Airbus cockpit submodules in [`src/widgets/airbus/`](src/widgets/airbus/) (`mod.rs`, `fcu.rs`, `apu.rs`, `surfaces.rs`, `brakes.rs`, `korry.rs`).
     - [`src/font/`](src/font/) — `5×7` and `3×5` bitmap font rasterizers (`mod.rs`), glyph tables (`glyphs.rs`), and geometric primitives (`primitives.rs`).
-    - [`src/telemetry.rs`](src/telemetry.rs) — macOS system metrics collection.
+    - [`src/telemetry/`](src/telemetry/) — macOS system metrics collection (`mod.rs`) and background Claude & Google Gemini quota polling (`ai_limits.rs`).
     - [`src/macos/`](src/macos/) — macOS screen-lock/display-sleep detection (`lock.rs`), `launchd` service management (`service.rs`), and POSIX signals (`signals.rs`).
     - [`src/deck/`](src/deck/) — Stream Deck session loop (`mod.rs`), USB device management (`device.rs`), button input handling (`input.rs`), and LCD rendering (`render.rs`).
 - **Avoid Monolithic Files**:

@@ -1,3 +1,10 @@
+pub mod ai_limits;
+
+pub use ai_limits::{
+    AiLimitsState, AiProviderLimits, current_ai_limits, fetch_claude_limits, fetch_gemini_limits,
+    parse_claude_usage_json, parse_gemini_status_json, request_ai_limits_refresh,
+};
+
 use crate::widgets::TelemetrySnapshot;
 use crate::xplane::A320FcuState;
 use std::process::Command;
@@ -60,6 +67,10 @@ pub fn is_dynamic_telemetry_tile(tile_type: &str) -> bool {
             | "gpu"
             | "memory"
             | "ram"
+            | "claude"
+            | "claude_limits"
+            | "gemini"
+            | "gemini_limits"
             | "ops_status"
             | "status"
             | "a320_fcu"
@@ -75,6 +86,8 @@ pub fn build_snapshot<'a>(
     core_buf: &'a mut Vec<f32>,
     gpu_cores: usize,
     live_gpu_pct: f32,
+    claude_limits: AiProviderLimits,
+    gemini_limits: AiProviderLimits,
     active_mode: &'a str,
     next_mode: &'a str,
     mode_index: usize,
@@ -128,6 +141,8 @@ pub fn build_snapshot<'a>(
         mem_used_gb,
         mem_total_gb,
         swap_used_pct,
+        claude_limits,
+        gemini_limits,
         active_mode,
         next_mode,
         mode_index,
@@ -164,6 +179,8 @@ mod tests {
     fn test_is_dynamic_telemetry_tile() {
         assert!(is_dynamic_telemetry_tile("cpu"));
         assert!(is_dynamic_telemetry_tile("gpu"));
+        assert!(is_dynamic_telemetry_tile("claude"));
+        assert!(is_dynamic_telemetry_tile("gemini"));
         assert!(is_dynamic_telemetry_tile("a320_fcu"));
         assert!(!is_dynamic_telemetry_tile("mode"));
         assert!(!is_dynamic_telemetry_tile("panel"));

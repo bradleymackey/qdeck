@@ -1,8 +1,10 @@
+pub mod ai_limits;
 pub mod airbus;
 pub mod icons;
 pub mod navigation;
 pub mod system;
 
+pub use ai_limits::{render_claude_limits_tile, render_gemini_limits_tile};
 pub use airbus::render_a320_fcu_tile;
 pub use navigation::{
     render_launcher_tile, render_mode_tile, render_panel_tile, render_standby_tile,
@@ -13,6 +15,7 @@ pub use system::{
 };
 
 use crate::config::{ResolvedTheme, TileConfig};
+use crate::telemetry::AiProviderLimits;
 use crate::xplane::A320FcuState;
 use image::RgbImage;
 
@@ -25,6 +28,8 @@ pub struct TelemetrySnapshot<'a> {
     pub mem_used_gb: f32,
     pub mem_total_gb: f32,
     pub swap_used_pct: f32,
+    pub claude_limits: AiProviderLimits,
+    pub gemini_limits: AiProviderLimits,
     pub active_mode: &'a str,
     pub next_mode: &'a str,
     pub mode_index: usize,
@@ -60,6 +65,12 @@ pub fn render_tile_image(
         "memory" | "ram" => {
             render_memory_tile(width, height, tile, theme, snapshot, is_highlighted)
         }
+        "claude" | "claude_limits" => {
+            render_claude_limits_tile(width, height, tile, theme, snapshot, is_highlighted)
+        }
+        "gemini" | "gemini_limits" => {
+            render_gemini_limits_tile(width, height, tile, theme, snapshot, is_highlighted)
+        }
         "a320_fcu" | "xplane" | "fcu" | "a320" => {
             render_a320_fcu_tile(width, height, tile, theme, snapshot, is_highlighted)
         }
@@ -93,6 +104,16 @@ mod tests {
             mem_used_gb: 20.0,
             mem_total_gb: 32.0,
             swap_used_pct: 10.0,
+            claude_limits: AiProviderLimits {
+                session_pct: 5.0,
+                weekly_pct: 1.0,
+                available: true,
+            },
+            gemini_limits: AiProviderLimits {
+                session_pct: 1.0,
+                weekly_pct: 58.0,
+                available: true,
+            },
             active_mode: "xplane",
             next_mode: "dashboard",
             mode_index: 1,
