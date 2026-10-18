@@ -16,12 +16,13 @@ pub fn render_claude_limits_tile(
     is_highlighted: bool,
 ) -> RgbImage {
     let claude = telemetry.claude_limits;
+    let header = tile.label.as_deref().unwrap_or("CLAUDE");
     render_dual_limit_tile(
         width,
         height,
         tile,
         theme,
-        "CLAUDE",
+        header,
         None,
         "SES",
         claude.session_pct,
@@ -34,9 +35,10 @@ pub fn render_claude_limits_tile(
     )
 }
 
-/// Renders a Google Gemini / Antigravity usage limits tile that toggles on click between:
-/// - View 0 (`1/2`): Gemini 4 Argon (`ARG`) + Gemini 3.8 Flash (`FLS`)
-/// - View 1 (`2/2`): Claude (`CLD`) + GPT-OSS (`GPT`)
+/// Renders a Google Gemini / Antigravity usage limits tile with 3 pages toggled on click:
+/// - Page 0 (`1/3`): `GEMINI` (`SES` + `WK`)
+/// - Page 1 (`2/3`): `ARGON` (`SES` + `WK`)
+/// - Page 2 (`3/3`): `CLD/GPT` (`SES` + `WK`)
 pub fn render_gemini_limits_tile(
     width: u32,
     height: u32,
@@ -46,10 +48,11 @@ pub fn render_gemini_limits_tile(
     is_highlighted: bool,
 ) -> RgbImage {
     let gem = telemetry.gemini_limits;
-    let (badge, row1_tag, row1_pct, row2_tag, row2_pct) = if gem.view_index.is_multiple_of(2) {
-        ("1/2", "ARG", gem.argon_pct, "FLS", gem.flash_pct)
-    } else {
-        ("2/2", "CLD", gem.claude_pct, "GPT", gem.gpt_pct)
+    let page0_label = tile.label.as_deref().unwrap_or("GEMINI");
+    let (header, badge, pair) = match gem.page_index % 3 {
+        0 => (page0_label, "1/3", gem.gemini),
+        1 => ("ARGON", "2/3", gem.argon),
+        _ => ("CLD/GPT", "3/3", gem.claude_gpt),
     };
 
     render_dual_limit_tile(
@@ -57,12 +60,12 @@ pub fn render_gemini_limits_tile(
         height,
         tile,
         theme,
-        "GEMINI",
+        header,
         Some(badge),
-        row1_tag,
-        row1_pct,
-        row2_tag,
-        row2_pct,
+        "SES",
+        pair.session_pct,
+        "WK",
+        pair.weekly_pct,
         gem.available,
         telemetry.tick,
         telemetry.demo_mode_active,
@@ -76,7 +79,7 @@ fn render_dual_limit_tile(
     height: u32,
     tile: &TileConfig,
     theme: &ResolvedTheme,
-    default_label: &str,
+    header_label: &str,
     page_badge: Option<&str>,
     row1_tag: &str,
     row1_val: f32,
@@ -123,8 +126,7 @@ fn render_dual_limit_tile(
         theme.phosphor_dim
     };
 
-    let label = tile.label.as_deref().unwrap_or(default_label);
-    draw_text_5x7(&mut img, 5, 5, label, 1, header_color);
+    draw_text_5x7(&mut img, 5, 5, header_label, 1, header_color);
 
     if let Some(badge) = page_badge {
         let bw = (badge.len() as i32) * 4 - 1;

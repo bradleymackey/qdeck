@@ -47,11 +47,16 @@ pub(super) fn process_button_edges(
             {
                 let norm_type = tile.tile_type.trim().to_ascii_lowercase();
                 if matches!(norm_type.as_str(), "gemini" | "gemini_limits") {
-                    let view = toggle_gemini_view();
+                    let page = toggle_gemini_view();
+                    let page_name = match page % 3 {
+                        0 => "GEMINI (SES + WK)",
+                        1 => "ARGON (SES + WK)",
+                        _ => "CLD/GPT (SES + WK)",
+                    };
                     println!(
-                        "[QDECK] Gemini limits view toggled -> {}/2 ({})",
-                        view + 1,
-                        if view == 0 { "ARG + FLS" } else { "CLD + GPT" }
+                        "[QDECK] Gemini limits page toggled -> {}/3 ({})",
+                        page + 1,
+                        page_name
                     );
                     request_ai_limits_refresh();
                 } else if matches!(norm_type.as_str(), "claude" | "claude_limits") {

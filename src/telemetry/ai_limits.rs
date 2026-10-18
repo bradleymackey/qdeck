@@ -8,9 +8,9 @@ use std::time::Duration;
 
 const AI_LIMITS_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
 
-/// Utilization percentages for Claude's rolling 5-hour Session (`SES`) and 7-day Weekly (`WK`) windows.
+/// Session (`5h`) and Weekly (`7d`) utilization percentages (`0.0..=100.0`) for a single quota group.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct ClaudeLimits {
+pub struct QuotaWindowPair {
     /// 5-hour session utilization percentage (`0.0..=100.0`)
     pub session_pct: f32,
     /// 7-day weekly utilization percentage (`0.0..=100.0`)
@@ -19,28 +19,27 @@ pub struct ClaudeLimits {
     pub available: bool,
 }
 
-/// Utilization percentages for Google Gemini / Antigravity model quota pools:
-/// - View 0 (`1/2`): Gemini 4 Argon (`ARG`) & Gemini 3.8 Flash (`FLS`)
-/// - View 1 (`2/2`): Claude (`CLD`) & GPT-OSS (`GPT`)
+pub type ClaudeLimits = QuotaWindowPair;
+
+/// Utilization percentages across all 3 Google Gemini / Antigravity quota groups
+/// returned by `RetrieveUserQuotaSummary`:
+/// - Page 0 (`1/3`): `GEMINI` (`gemini-5h` + `gemini-weekly`)
+/// - Page 1 (`2/3`): `ARGON` (Argon `5h` + `gemini-argon-wtu-weekly`)
+/// - Page 2 (`3/3`): `CLD/GPT` (`3p-5h` + `3p-weekly`)
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GeminiLimits {
-    /// Gemini 4 Argon utilization percentage (`0.0..=100.0`)
-    pub argon_pct: f32,
-    /// Gemini 3.8 Flash utilization percentage (`0.0..=100.0`)
-    pub flash_pct: f32,
-    /// Antigravity Claude (Opus/Sonnet) utilization percentage (`0.0..=100.0`)
-    pub claude_pct: f32,
-    /// Antigravity GPT-OSS utilization percentage (`0.0..=100.0`)
-    pub gpt_pct: f32,
-    /// Active toggle view (`0` = Argon + Flash, `1` = Claude + GPT)
-    pub view_index: u8,
+    pub gemini: QuotaWindowPair,
+    pub argon: QuotaWindowPair,
+    pub claude_gpt: QuotaWindowPair,
+    /// Active page on the Gemini tile (`0` = Gemini, `1` = Argon, `2` = Claude/GPT)
+    pub page_index: u8,
     /// Whether live quota telemetry has been successfully retrieved
     pub available: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AiLimitsState {
-    pub claude: ClaudeLimits,
+    pub claude: QuotaWindowPair,
     pub gemini: GeminiLimits,
 }
 
@@ -50,14 +49,14 @@ struct AiLimitsWorker {
 }
 
 static AI_LIMITS_WORKER: OnceLock<Arc<AiLimitsWorker>> = OnceLock::new();
-static GEMINI_VIEW_INDEX: AtomicU8 = AtomicU8::new(0);
+static GEMINI_PAGE_INDEX: AtomicU8 = AtomicU8::new(0);
 
-/// Cycles the active Gemini tile view (`0`: Argon + Flash <-> `1`: Claude + GPT)
-/// and returns the new view index.
+/// Cycles the active Gemini tile page (`0`: Gemini -> `1`: Argon -> `2`: Claude/GPT -> `0`)
+/// and returns the new page index (`0..3`).
 pub fn toggle_gemini_view() -> u8 {
-    let prev = GEMINI_VIEW_INDEX.load(Ordering::Relaxed);
-    let next = (prev + 1) % 2;
-    GEMINI_VIEW_INDEX.store(next, Ordering::Relaxed);
+    let prev = GEMINI_PAGE_INDEX.load(Ordering::Relaxed);
+    let next = (prev + 1) % 3;
+    GEMINI_PAGE_INDEX.store(next, Ordering::Relaxed);
     next
 }
 
@@ -103,7 +102,7 @@ fn get_or_start_worker() -> &'static Arc<AiLimitsWorker> {
 pub fn current_ai_limits() -> AiLimitsState {
     let worker = get_or_start_worker();
     let mut state = worker.state.lock().map(|g| *g).unwrap_or_default();
-    state.gemini.view_index = GEMINI_VIEW_INDEX.load(Ordering::Relaxed);
+    state.gemini.page_index = GEMINI_PAGE_INDEX.load(Ordering::Relaxed);
     state
 }
 
@@ -118,7 +117,7 @@ pub fn request_ai_limits_refresh() {
 }
 
 /// Fetches Claude session (`five_hour`) and weekly (`seven_day`) utilization from Anthropic's OAuth usage endpoint.
-pub fn fetch_claude_limits() -> Option<ClaudeLimits> {
+pub fn fetch_claude_limits() -> Option<QuotaWindowPair> {
     let token = read_claude_oauth_token()?;
     let auth_header = format!("Authorization: Bearer {token}");
     let output = Command::new("curl")
@@ -171,19 +170,19 @@ fn read_claude_oauth_token() -> Option<String> {
 }
 
 /// Parses Anthropic `/api/oauth/usage` JSON for `five_hour.utilization` and `seven_day.utilization`.
-pub fn parse_claude_usage_json(json: &str) -> Option<ClaudeLimits> {
+pub fn parse_claude_usage_json(json: &str) -> Option<QuotaWindowPair> {
     let session_pct = extract_nested_f32(json, "\"five_hour\"", "\"utilization\"")?;
     let weekly_pct = extract_nested_f32(json, "\"seven_day\"", "\"utilization\"").unwrap_or(0.0);
 
-    Some(ClaudeLimits {
+    Some(QuotaWindowPair {
         session_pct: session_pct.clamp(0.0, 100.0),
         weekly_pct: weekly_pct.clamp(0.0, 100.0),
         available: true,
     })
 }
 
-/// Fetches live Google Gemini / Antigravity model limits (`Argon`, `Flash`, `Claude`, `GPT`)
-/// from the local Antigravity `language_server` via `GetCascadeModelConfigData` (with `GetUserStatus` fallback).
+/// Fetches live Google Gemini / Antigravity quota groups (`Gemini`, `Argon`, `Claude/GPT`)
+/// with both `5h` session and `weekly` limits via `/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary`.
 pub fn fetch_gemini_limits() -> Option<GeminiLimits> {
     let ps_out = Command::new("ps")
         .args(["-ax", "-o", "pid=,command="])
@@ -200,39 +199,37 @@ pub fn fetch_gemini_limits() -> Option<GeminiLimits> {
     let ports = parse_lsof_listen_ports(&lsof_text);
 
     let csrf_header = format!("x-codeium-csrf-token: {csrf_token}");
-    for rpc in ["GetCascadeModelConfigData", "GetUserStatus"] {
-        for &port in ports.iter().take(4) {
-            for scheme in ["http", "https"] {
-                let url = format!(
-                    "{scheme}://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/{rpc}"
-                );
-                let Ok(output) = Command::new("curl")
-                    .args([
-                        "-sk",
-                        "--max-time",
-                        "2",
-                        "-X",
-                        "POST",
-                        &url,
-                        "-H",
-                        "Content-Type: application/json",
-                        "-H",
-                        "Connect-Protocol-Version: 1",
-                        "-H",
-                        &csrf_header,
-                        "-d",
-                        r#"{"metadata":{"ideName":"antigravity","extensionName":"antigravity","locale":"en"}}"#,
-                    ])
-                    .output()
-                else {
-                    continue;
-                };
+    for &port in ports.iter().take(4) {
+        for scheme in ["http", "https"] {
+            let url = format!(
+                "{scheme}://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+            );
+            let Ok(output) = Command::new("curl")
+                .args([
+                    "-sk",
+                    "--max-time",
+                    "2",
+                    "-X",
+                    "POST",
+                    &url,
+                    "-H",
+                    "Content-Type: application/json",
+                    "-H",
+                    "Connect-Protocol-Version: 1",
+                    "-H",
+                    &csrf_header,
+                    "-d",
+                    r#"{"metadata":{"ideName":"antigravity","extensionName":"antigravity","locale":"en"}}"#,
+                ])
+                .output()
+            else {
+                continue;
+            };
 
-                if output.status.success() {
-                    let body = String::from_utf8_lossy(&output.stdout);
-                    if let Some(limits) = parse_gemini_status_json(&body) {
-                        return Some(limits);
-                    }
+            if output.status.success() {
+                let body = String::from_utf8_lossy(&output.stdout);
+                if let Some(limits) = parse_gemini_quota_summary_json(&body) {
+                    return Some(limits);
                 }
             }
         }
@@ -280,68 +277,95 @@ pub fn parse_lsof_listen_ports(lsof_text: &str) -> Vec<u16> {
     ports
 }
 
-/// Parses Antigravity `GetCascadeModelConfigData` / `GetUserStatus` JSON for:
-/// - `argon_pct` (Gemini Argon)
-/// - `flash_pct` (Gemini Flash)
-/// - `claude_pct` (Claude Opus/Sonnet)
-/// - `gpt_pct` (GPT-OSS)
-pub fn parse_gemini_status_json(json: &str) -> Option<GeminiLimits> {
-    if !json.contains("\"clientModelConfigs\"") {
+/// Parses Antigravity `RetrieveUserQuotaSummary` JSON into the 3 quota pages:
+/// - `gemini` (`gemini-5h` + `gemini-weekly`)
+/// - `argon` (Argon `5h` + `gemini-argon-wtu-weekly`)
+/// - `claude_gpt` (`3p-5h` + `3p-weekly`)
+pub fn parse_gemini_quota_summary_json(json: &str) -> Option<GeminiLimits> {
+    if !json.contains("\"bucketId\"") {
         return None;
     }
 
-    let mut argon_pct: Option<f32> = None;
-    let mut flash_pct: Option<f32> = None;
-    let mut claude_pct: Option<f32> = None;
-    let mut gpt_pct: Option<f32> = None;
+    let mut gemini = QuotaWindowPair {
+        session_pct: 0.0,
+        weekly_pct: 0.0,
+        available: true,
+    };
+    let mut argon = QuotaWindowPair {
+        session_pct: 0.0,
+        weekly_pct: 0.0,
+        available: true,
+    };
+    let mut claude_gpt = QuotaWindowPair {
+        session_pct: 0.0,
+        weekly_pct: 0.0,
+        available: true,
+    };
+    let mut found_any = false;
     let mut search_from = 0;
 
-    while let Some(rel_pos) = json[search_from..].find("\"label\"") {
-        let label_key_pos = search_from + rel_pos;
-        let after_key = &json[label_key_pos + "\"label\"".len()..];
-        let next_label_pos = after_key
-            .find("\"label\"")
-            .map(|p| label_key_pos + "\"label\"".len() + p)
+    while let Some(rel_pos) = json[search_from..].find("\"bucketId\"") {
+        let key_pos = search_from + rel_pos;
+        let after_key = &json[key_pos + "\"bucketId\"".len()..];
+        let next_pos = after_key
+            .find("\"bucketId\"")
+            .map(|p| key_pos + "\"bucketId\"".len() + p)
             .unwrap_or(json.len());
-        let chunk = &json[label_key_pos..next_label_pos];
+        let chunk = &json[key_pos..next_pos];
 
-        if let Some(label) = extract_json_string_field(chunk, "label")
-            && chunk.contains("\"quotaInfo\"")
-        {
-            let lower = label.to_ascii_lowercase();
-            let rem = extract_nested_f32(chunk, "\"quotaInfo\"", "\"remainingFraction\"")
-                .unwrap_or(1.0)
-                .clamp(0.0, 1.0);
-            let used_pct = ((1.0 - rem) * 100.0).clamp(0.0, 100.0);
-
-            if lower.contains("gemini") && lower.contains("flash") {
-                flash_pct = Some(used_pct);
-            } else if lower.contains("gemini")
-                && (lower.contains("argon") || lower.contains("pro") || lower.contains("ultra"))
+        if let Some(bucket_id) = extract_json_string_field(chunk, "bucketId") {
+            let window = extract_json_string_field(chunk, "window").unwrap_or_default();
+            let rem = if chunk.contains("\"disabled\":true") || chunk.contains("\"disabled\": true")
             {
-                argon_pct = Some(used_pct);
-            } else if lower.contains("claude") {
-                claude_pct = Some(used_pct);
-            } else if lower.contains("gpt") {
-                gpt_pct = Some(used_pct);
+                0.0
+            } else {
+                extract_f32_after_key(chunk, "\"remainingFraction\"")
+                    .unwrap_or(1.0)
+                    .clamp(0.0, 1.0)
+            };
+            let used_pct = ((1.0 - rem) * 100.0).clamp(0.0, 100.0);
+            let is_5h = window.eq_ignore_ascii_case("5h") || bucket_id.ends_with("-5h");
+
+            let lower_id = bucket_id.to_ascii_lowercase();
+            if lower_id.contains("argon") {
+                if is_5h {
+                    argon.session_pct = used_pct;
+                } else {
+                    argon.weekly_pct = used_pct;
+                }
+                found_any = true;
+            } else if lower_id.starts_with("gemini") {
+                if is_5h {
+                    gemini.session_pct = used_pct;
+                } else {
+                    gemini.weekly_pct = used_pct;
+                }
+                found_any = true;
+            } else if lower_id.starts_with("3p")
+                || lower_id.contains("claude")
+                || lower_id.contains("gpt")
+            {
+                if is_5h {
+                    claude_gpt.session_pct = used_pct;
+                } else {
+                    claude_gpt.weekly_pct = used_pct;
+                }
+                found_any = true;
             }
         }
 
-        search_from = next_label_pos;
+        search_from = next_pos;
     }
 
-    if argon_pct.is_none() && flash_pct.is_none() && claude_pct.is_none() && gpt_pct.is_none() {
+    if !found_any {
         return None;
     }
 
-    let cld_or_gpt = claude_pct.or(gpt_pct).unwrap_or(0.0);
-
     Some(GeminiLimits {
-        argon_pct: argon_pct.unwrap_or(0.0),
-        flash_pct: flash_pct.unwrap_or(0.0),
-        claude_pct: claude_pct.unwrap_or(cld_or_gpt),
-        gpt_pct: gpt_pct.unwrap_or(cld_or_gpt),
-        view_index: GEMINI_VIEW_INDEX.load(Ordering::Relaxed),
+        gemini,
+        argon,
+        claude_gpt,
+        page_index: GEMINI_PAGE_INDEX.load(Ordering::Relaxed),
         available: true,
     })
 }
@@ -357,20 +381,24 @@ fn extract_json_string_field(json: &str, field_name: &str) -> Option<String> {
     Some(after_quote[..end_quote].to_string())
 }
 
-fn extract_nested_f32(json: &str, parent_key: &str, child_key: &str) -> Option<f32> {
-    let parent_pos = json.find(parent_key)?;
-    let after_parent = &json[parent_pos + parent_key.len()..];
-    let close_brace = after_parent.find('}').unwrap_or(after_parent.len());
-    let obj_slice = &after_parent[..close_brace];
-    let child_pos = obj_slice.find(child_key)?;
-    let after_child = &obj_slice[child_pos + child_key.len()..];
-    let colon_pos = after_child.find(':')?;
-    let after_colon = after_child[colon_pos + 1..].trim_start();
+fn extract_f32_after_key(json: &str, key: &str) -> Option<f32> {
+    let pos = json.find(key)?;
+    let after_key = &json[pos + key.len()..];
+    let colon_pos = after_key.find(':')?;
+    let after_colon = after_key[colon_pos + 1..].trim_start();
     let num_str: String = after_colon
         .chars()
         .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
         .collect();
     num_str.parse::<f32>().ok()
+}
+
+fn extract_nested_f32(json: &str, parent_key: &str, child_key: &str) -> Option<f32> {
+    let parent_pos = json.find(parent_key)?;
+    let after_parent = &json[parent_pos + parent_key.len()..];
+    let close_brace = after_parent.find('}').unwrap_or(after_parent.len());
+    let obj_slice = &after_parent[..close_brace];
+    extract_f32_after_key(obj_slice, child_key)
 }
 
 #[cfg(test)]
@@ -390,33 +418,42 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_gemini_status_json() {
+    fn test_parse_gemini_quota_summary_json() {
         let sample = r#"{
-            "clientModelConfigs": [
-                {
-                    "label": "Gemini 4 Argon (High)",
-                    "quotaInfo": {"remainingFraction": 0.335, "resetTime": "2026-10-24T07:04:32Z"}
-                },
-                {
-                    "label": "Gemini 3.8 Flash (High)",
-                    "quotaInfo": {"remainingFraction": 0.976, "resetTime": "2026-10-17T20:29:44Z"}
-                },
-                {
-                    "label": "Claude Sonnet 5.5 (High)",
-                    "quotaInfo": {"remainingFraction": 0.85, "resetTime": "2026-10-17T20:50:28Z"}
-                },
-                {
-                    "label": "GPT-OSS 120B (Medium)",
-                    "quotaInfo": {"remainingFraction": 0.90, "resetTime": "2026-10-17T20:50:28Z"}
-                }
-            ]
+            "response": {
+                "groups": [
+                    {
+                        "displayName": "Gemini Models",
+                        "buckets": [
+                            {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.98},
+                            {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.90}
+                        ]
+                    },
+                    {
+                        "displayName": "Claude and GPT models",
+                        "buckets": [
+                            {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0.75},
+                            {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 0.95}
+                        ]
+                    },
+                    {
+                        "displayName": "Gemini 4 Argon",
+                        "buckets": [
+                            {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly", "remainingFraction": 0.28}
+                        ]
+                    }
+                ]
+            }
         }"#;
-        let limits = parse_gemini_status_json(sample).expect("Should parse Gemini status JSON");
+        let limits =
+            parse_gemini_quota_summary_json(sample).expect("Should parse Gemini quota summary");
         assert!(limits.available);
-        assert!((limits.argon_pct - 66.5).abs() < 0.1);
-        assert!((limits.flash_pct - 2.4).abs() < 0.1);
-        assert!((limits.claude_pct - 15.0).abs() < 0.1);
-        assert!((limits.gpt_pct - 10.0).abs() < 0.1);
+        assert!((limits.gemini.session_pct - 10.0).abs() < 0.1);
+        assert!((limits.gemini.weekly_pct - 2.0).abs() < 0.1);
+        assert!((limits.argon.session_pct - 0.0).abs() < 0.1);
+        assert!((limits.argon.weekly_pct - 72.0).abs() < 0.1);
+        assert!((limits.claude_gpt.session_pct - 5.0).abs() < 0.1);
+        assert!((limits.claude_gpt.weekly_pct - 25.0).abs() < 0.1);
     }
 
     #[test]

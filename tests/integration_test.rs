@@ -44,11 +44,22 @@ fn test_full_deck_matrix_across_all_modes_and_panels() {
                             available: true,
                         },
                         gemini_limits: GeminiLimits {
-                            argon_pct: 66.0,
-                            flash_pct: 2.0,
-                            claude_pct: 10.0,
-                            gpt_pct: 5.0,
-                            view_index: 0,
+                            gemini: qdeck::telemetry::QuotaWindowPair {
+                                session_pct: 5.0,
+                                weekly_pct: 3.0,
+                                available: true,
+                            },
+                            argon: qdeck::telemetry::QuotaWindowPair {
+                                session_pct: 0.0,
+                                weekly_pct: 66.0,
+                                available: true,
+                            },
+                            claude_gpt: qdeck::telemetry::QuotaWindowPair {
+                                session_pct: 0.0,
+                                weekly_pct: 3.0,
+                                available: true,
+                            },
+                            page_index: (m_idx + p_idx) as u8 % 3,
                             available: true,
                         },
                         active_mode: mode,

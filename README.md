@@ -12,7 +12,7 @@ A tactical, phosphor-green operations-center controller for the **Elgato Stream 
 - **System Telemetry & AI Quota Dashboard (`dashboard` mode)**:
   - Live CPU per-core bar graph and GPU core-grid utilization tiles (`0,3` and `0,4`).
   - **Claude Usage Limits (`1,3` / Tile `09`)**: Displays both 5-hour Session (`SES`) and 7-day Weekly (`WK`) utilization percentages and 15-segment progress bars via Anthropic's OAuth usage API.
-  - **Google Gemini Usage Limits (`1,4` / Tile `10`)**: Displays both Session (`SES` Flash 5h) and Weekly (`WK` Argon/Pro 7d) utilization percentages and 15-segment progress bars via the local Antigravity language server (`GetUserStatus`).
+  - **Google Gemini Usage Limits (`1,4` / Tile `10`)**: Cycles across 3 pages on click — `GEMINI` (`1/3`), `ARGON` (`2/3`), and `CLD/GPT` (`3/3`) — with each page showing both 5-hour Session (`SES`) and 7-day Weekly (`WK`) utilization percentages and 15-segment progress bars via the local Antigravity language server (`RetrieveUserQuotaSummary`).
 - **4-Panel Airbus Cockpit Integration for X-Plane 12 (`xplane` page)**:
   - **Key `#1` (`BACK`)**: Returns to the `root` system telemetry page.
   - **Key `#2` (`PNL <ACTIVE> / NEXT: <NEXT>`)**: Cycles through 4 Airbus sub-panels across Keys `3–15`:

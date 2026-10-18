@@ -110,11 +110,22 @@ mod tests {
                 available: true,
             },
             gemini_limits: GeminiLimits {
-                argon_pct: 66.0,
-                flash_pct: 2.0,
-                claude_pct: 0.0,
-                gpt_pct: 0.0,
-                view_index: 0,
+                gemini: crate::telemetry::QuotaWindowPair {
+                    session_pct: 5.0,
+                    weekly_pct: 3.0,
+                    available: true,
+                },
+                argon: crate::telemetry::QuotaWindowPair {
+                    session_pct: 0.0,
+                    weekly_pct: 66.0,
+                    available: true,
+                },
+                claude_gpt: crate::telemetry::QuotaWindowPair {
+                    session_pct: 0.0,
+                    weekly_pct: 3.0,
+                    available: true,
+                },
+                page_index: 0,
                 available: true,
             },
             active_mode: "xplane",
