@@ -9,7 +9,7 @@ vid = 0x0fd9
 # pid = 0x0080          # Stream Deck MK.2 (auto-detected if omitted)
 background_mode = "grid" # "grid" (tactical standby reticle) or "blank" (pure black)
 default_mode = "dashboard"
-modes = ["dashboard", "xplane"]
+modes = ["dashboard", "xplane"] # enabled modes; remove one to disable it (its tiles are ignored)
 xplane_addr = "127.0.0.1:49000"
 
 [theme]

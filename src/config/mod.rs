@@ -62,8 +62,9 @@ impl QDeckConfig {
         toml::from_str(DEFAULT_CONFIG_TOML).unwrap_or_default()
     }
 
-    /// Returns the ordered list of modes (always starting with `default_mode` or `"dashboard"`),
-    /// including any additional modes referenced by tiles.
+    /// Returns the ordered list of enabled modes. `modes` is authoritative: a mode left out of
+    /// it is disabled, even if tiles still reference it. Falls back to `default_mode` (or
+    /// `"dashboard"`) when `modes` is empty.
     pub fn effective_modes(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for m in &self.modes {
@@ -79,14 +80,6 @@ impl QDeckConfig {
             } else {
                 def
             });
-        }
-        for tile in &self.tiles {
-            if let Some(m) = &tile.mode {
-                let clean = m.trim().to_ascii_lowercase();
-                if !clean.is_empty() && clean != "*" && clean != "all" && !out.contains(&clean) {
-                    out.push(clean);
-                }
-            }
         }
         out
     }
@@ -214,6 +207,17 @@ mod tests {
             cfg.effective_panels("xplane"),
             vec!["fcu", "apu", "flt", "sys"]
         );
+    }
+
+    #[test]
+    fn test_modes_list_disables_unlisted_modes() {
+        let mut cfg = QDeckConfig::builtin_default();
+        cfg.modes = vec!["dashboard".to_string()];
+        assert_eq!(cfg.effective_modes(), vec!["dashboard"]);
+
+        cfg.modes = Vec::new();
+        cfg.default_mode = "xplane".to_string();
+        assert_eq!(cfg.effective_modes(), vec!["xplane"]);
     }
 
     #[test]
