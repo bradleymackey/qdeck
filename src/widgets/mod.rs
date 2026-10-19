@@ -1,6 +1,9 @@
 pub mod ai_limits;
 pub mod airbus;
 pub mod airport;
+pub mod audio;
+pub mod disk;
+pub mod gauge;
 pub mod icons;
 pub mod navigation;
 pub mod system;
@@ -8,31 +11,38 @@ pub mod system;
 pub use ai_limits::{render_claude_limits_tile, render_gemini_limits_tile};
 pub use airbus::render_a320_fcu_tile;
 pub use airport::render_airport_tile;
+pub use audio::render_audio_tile;
+pub use disk::render_disk_tile;
+pub use gauge::{GaugeTile, format_binary_bytes, render_gauge_tile};
 pub use navigation::{
     render_launcher_tile, render_mode_tile, render_panel_tile, render_standby_tile,
 };
-pub use system::{
-    gpu_grid_dimensions, render_cpu_tile, render_gpu_tile, render_memory_tile,
-    render_ops_status_tile,
-};
+pub use system::{render_cpu_tile, render_gpu_tile, render_memory_tile, render_ops_status_tile};
 
 use crate::config::{ResolvedTheme, TileConfig};
-use crate::telemetry::{AirportStatus, ClaudeLimits, GeminiLimits};
+use crate::telemetry::{AirportStatus, AudioDevices, ClaudeLimits, DisksState, GeminiLimits};
 use crate::xplane::A320FcuState;
 use image::RgbImage;
 
 pub struct TelemetrySnapshot<'a> {
     pub total_cpu_pct: f32,
+    pub load_avg_1m: f32,
     pub core_usages: &'a [f32],
     pub gpu_pct: f32,
     pub gpu_cores: usize,
+    pub gpu_mem_used_bytes: u64,
+    pub gpu_mem_alloc_bytes: u64,
     pub mem_used_pct: f32,
     pub mem_used_gb: f32,
     pub mem_total_gb: f32,
     pub swap_used_pct: f32,
+    pub swap_used_bytes: u64,
+    pub swap_total_bytes: u64,
     pub claude_limits: ClaudeLimits,
     pub gemini_limits: GeminiLimits,
     pub airport: AirportStatus,
+    pub audio_devices: &'a AudioDevices,
+    pub disks: &'a DisksState,
     pub active_mode: &'a str,
     pub next_mode: &'a str,
     pub mode_index: usize,
@@ -68,6 +78,9 @@ pub fn render_tile_image(
         "memory" | "ram" => {
             render_memory_tile(width, height, tile, theme, snapshot, is_highlighted)
         }
+        "disk" | "storage" | "volume" => {
+            render_disk_tile(width, height, tile, theme, snapshot, is_highlighted)
+        }
         "claude" | "claude_limits" => {
             render_claude_limits_tile(width, height, tile, theme, snapshot, is_highlighted)
         }
@@ -75,6 +88,9 @@ pub fn render_tile_image(
             render_gemini_limits_tile(width, height, tile, theme, snapshot, is_highlighted)
         }
         "airport" => render_airport_tile(width, height, tile, theme, snapshot, is_highlighted),
+        "audio" | "audio_io" | "sound" => {
+            render_audio_tile(width, height, tile, theme, snapshot, is_highlighted)
+        }
         "a320_fcu" | "xplane" | "fcu" | "a320" => {
             render_a320_fcu_tile(width, height, tile, theme, snapshot, is_highlighted)
         }
@@ -92,6 +108,11 @@ pub fn render_tile_image(
 mod tests {
     use super::*;
     use crate::config::QDeckConfig;
+    use crate::telemetry::{AudioEndpoint, DiskVolume};
+    use std::sync::LazyLock;
+
+    static NO_AUDIO: LazyLock<AudioDevices> = LazyLock::new(AudioDevices::default);
+    static NO_DISKS: LazyLock<DisksState> = LazyLock::new(DisksState::default);
 
     /// A plausible dashboard snapshot carrying the given airport status.
     pub(super) fn snapshot_with_airport(
@@ -100,16 +121,23 @@ mod tests {
     ) -> TelemetrySnapshot<'_> {
         TelemetrySnapshot {
             total_cpu_pct: 42.0,
+            load_avg_1m: 2.0,
             core_usages: &[12.0, 35.0, 68.0, 91.0],
             gpu_pct: 55.0,
             gpu_cores: 40,
+            gpu_mem_used_bytes: 0,
+            gpu_mem_alloc_bytes: 0,
             mem_used_pct: 62.0,
             mem_used_gb: 20.0,
             mem_total_gb: 32.0,
             swap_used_pct: 10.0,
+            swap_used_bytes: 0,
+            swap_total_bytes: 0,
             claude_limits: ClaudeLimits::default(),
             gemini_limits: GeminiLimits::default(),
             airport,
+            audio_devices: &NO_AUDIO,
+            disks: &NO_DISKS,
             active_mode: "dashboard",
             next_mode: "xplane",
             mode_index: 0,
@@ -130,15 +158,46 @@ mod tests {
         let theme = cfg.theme.resolve();
         let fcu = A320FcuState::default();
         let cores = [12.0, 35.0, 68.0, 91.0, 20.0, 15.0, 40.0, 55.0];
+        let audio_devices = AudioDevices {
+            output: AudioEndpoint {
+                raw_name: "Bradley’s APP 2".to_string(),
+                short_name: "APP 2".to_string(),
+                transport: "BT".to_string(),
+            },
+            input: AudioEndpoint {
+                raw_name: "Brio 300".to_string(),
+                short_name: "BRIO 300".to_string(),
+                transport: "USB".to_string(),
+            },
+            available: true,
+        };
+        let disks = DisksState {
+            volumes: vec![DiskVolume {
+                raw_name: "Macintosh HD".to_string(),
+                short_name: "MAC HD".to_string(),
+                mount_point: "/".to_string(),
+                total_bytes: 2_000_000_000_000,
+                used_bytes: 867_000_000_000,
+                avail_bytes: 1_133_000_000_000,
+                used_pct: 43.4,
+            }],
+            active_index: 0,
+            available: true,
+        };
         let snap = TelemetrySnapshot {
             total_cpu_pct: 42.0,
+            load_avg_1m: 2.15,
             core_usages: &cores,
             gpu_pct: 55.0,
             gpu_cores: 40,
+            gpu_mem_used_bytes: 1_618_493_440,
+            gpu_mem_alloc_bytes: 16_684_777_472,
             mem_used_pct: 62.0,
             mem_used_gb: 20.0,
             mem_total_gb: 32.0,
-            swap_used_pct: 10.0,
+            swap_used_pct: 60.0,
+            swap_used_bytes: 1_939_865_600,
+            swap_total_bytes: 3_221_225_472,
             claude_limits: ClaudeLimits {
                 session_pct: 5.0,
                 weekly_pct: 1.0,
@@ -164,6 +223,8 @@ mod tests {
                 available: true,
             },
             airport: AirportStatus::default(),
+            audio_devices: &audio_devices,
+            disks: &disks,
             active_mode: "xplane",
             next_mode: "dashboard",
             mode_index: 1,

@@ -8,8 +8,9 @@ pub use render::{apply_mode_layout, render_key_to_deck};
 use crate::config::{QDeckConfig, ResolvedTheme};
 use crate::macos::{is_macos_screen_locked_or_asleep, is_shutdown_requested};
 use crate::telemetry::{
-    build_snapshot, current_ai_limits, current_airport_status, is_dynamic_telemetry_tile,
-    note_airport_tile_active, query_macos_gpu_stats,
+    AudioDevices, DisksState, GpuStats, build_snapshot, current_ai_limits, current_airport_status,
+    is_dynamic_telemetry_tile, note_airport_tile_active, query_macos_audio_devices,
+    query_macos_disks, query_macos_gpu_stats,
 };
 use crate::widgets::TelemetrySnapshot;
 use crate::xplane::{A320FcuState, XPlaneClient};
@@ -61,8 +62,9 @@ impl ActiveLayout {
         &'a self,
         sys: &System,
         core_buf: &'a mut Vec<f32>,
-        gpu_cores: usize,
-        live_gpu_pct: f32,
+        gpu: GpuStats,
+        audio_devices: &'a AudioDevices,
+        disks: &'a DisksState,
         mode_idx: usize,
         panel_idx: usize,
         fcu: &'a A320FcuState,
@@ -73,11 +75,12 @@ impl ActiveLayout {
         build_snapshot(
             sys,
             core_buf,
-            gpu_cores,
-            live_gpu_pct,
+            gpu,
             ai_limits.claude,
             ai_limits.gemini,
             current_airport_status(),
+            audio_devices,
+            disks,
             &self.active_mode,
             &self.next_mode,
             mode_idx,
@@ -105,8 +108,7 @@ pub fn run_deck_session(
     last_mtime: &mut Option<SystemTime>,
     xplane: &mut XPlaneClient,
     sys: &mut System,
-    gpu_cores: &mut usize,
-    live_gpu_pct: &mut f32,
+    gpu: &mut GpuStats,
     tick: &mut u64,
     max_frames: Option<u64>,
 ) -> Result<bool> {
@@ -140,6 +142,8 @@ pub fn run_deck_session(
     let mut prev_buttons = vec![0u8; total_keys as usize];
     let mut highlight_until: Vec<Option<Instant>> = vec![None; total_keys as usize];
     let mut core_buf: Vec<f32> = Vec::with_capacity(32);
+    let mut audio_devices: AudioDevices = query_macos_audio_devices();
+    let mut disks: DisksState = query_macos_disks();
     let mut screen_locked = is_macos_screen_locked_or_asleep();
 
     if screen_locked {
@@ -150,8 +154,9 @@ pub fn run_deck_session(
         let initial_snapshot = layout.snapshot(
             sys,
             &mut core_buf,
-            *gpu_cores,
-            *live_gpu_pct,
+            *gpu,
+            &audio_devices,
+            &disks,
             *mode_idx,
             *panel_idx,
             &xplane.state,
@@ -188,12 +193,15 @@ pub fn run_deck_session(
                 blank_and_sleep_deck(&mut deck, total_keys);
             } else {
                 println!("[QDECK] Mac display unlocked — restoring Stream Deck display");
+                audio_devices = query_macos_audio_devices();
+                disks = query_macos_disks();
                 let layout = ActiveLayout::resolve(cfg, modes, *mode_idx, panel_idx);
                 let snapshot = layout.snapshot(
                     sys,
                     &mut core_buf,
-                    *gpu_cores,
-                    *live_gpu_pct,
+                    *gpu,
+                    &audio_devices,
+                    &disks,
                     *mode_idx,
                     *panel_idx,
                     &xplane.state,
@@ -284,12 +292,15 @@ pub fn run_deck_session(
         }
 
         if outcome.mode_or_panel_switched {
+            audio_devices = query_macos_audio_devices();
+            disks = query_macos_disks();
             let layout = ActiveLayout::resolve(cfg, modes, *mode_idx, panel_idx);
             let snapshot = layout.snapshot(
                 sys,
                 &mut core_buf,
-                *gpu_cores,
-                *live_gpu_pct,
+                *gpu,
+                &audio_devices,
+                &disks,
                 *mode_idx,
                 *panel_idx,
                 &xplane.state,
@@ -316,8 +327,9 @@ pub fn run_deck_session(
             let snapshot = layout.snapshot(
                 sys,
                 &mut core_buf,
-                *gpu_cores,
-                *live_gpu_pct,
+                *gpu,
+                &audio_devices,
+                &disks,
                 *mode_idx,
                 *panel_idx,
                 &xplane.state,
@@ -377,12 +389,15 @@ pub fn run_deck_session(
                         *theme = cfg.theme.resolve();
                         *modes = cfg.effective_modes();
                         *mode_idx = modes.iter().position(|m| m == &prev_mode_name).unwrap_or(0);
+                        audio_devices = query_macos_audio_devices();
+                        disks = query_macos_disks();
                         let layout = ActiveLayout::resolve(cfg, modes, *mode_idx, panel_idx);
                         let snapshot = layout.snapshot(
                             sys,
                             &mut core_buf,
-                            *gpu_cores,
-                            *live_gpu_pct,
+                            *gpu,
+                            &audio_devices,
+                            &disks,
                             *mode_idx,
                             *panel_idx,
                             &xplane.state,
@@ -409,16 +424,18 @@ pub fn run_deck_session(
                 &layout.active_panel,
                 in_demo,
                 sys,
-                gpu_cores,
-                live_gpu_pct,
+                gpu,
+                &mut audio_devices,
+                &mut disks,
                 xplane,
             );
 
             let snapshot = layout.snapshot(
                 sys,
                 &mut core_buf,
-                *gpu_cores,
-                *live_gpu_pct,
+                *gpu,
+                &audio_devices,
+                &disks,
                 *mode_idx,
                 *panel_idx,
                 &xplane.state,
@@ -466,13 +483,16 @@ fn refresh_active_telemetry(
     active_panel: &str,
     in_demo: bool,
     sys: &mut System,
-    gpu_cores: &mut usize,
-    live_gpu_pct: &mut f32,
+    gpu: &mut GpuStats,
+    audio_devices: &mut AudioDevices,
+    disks: &mut DisksState,
     xplane: &mut XPlaneClient,
 ) {
     let mut needs_cpu = false;
     let mut needs_gpu = false;
     let mut needs_mem = false;
+    let mut needs_audio = false;
+    let mut needs_disk = false;
     let mut needs_xplane = false;
 
     for k in 0..total_keys {
@@ -481,6 +501,8 @@ fn refresh_active_telemetry(
                 "cpu" => needs_cpu = true,
                 "gpu" => needs_gpu = true,
                 "memory" | "ram" => needs_mem = true,
+                "disk" | "storage" | "volume" => needs_disk = true,
+                "audio" | "audio_io" | "sound" => needs_audio = true,
                 "a320_fcu" | "xplane" | "fcu" | "a320" => needs_xplane = true,
                 "airport" => note_airport_tile_active(&t.airport_icao()),
                 "ops_status" | "status" => {
@@ -499,9 +521,13 @@ fn refresh_active_telemetry(
         sys.refresh_memory();
     }
     if needs_gpu && !in_demo {
-        let (detected_cores, gpu_util) = query_macos_gpu_stats(*gpu_cores);
-        *gpu_cores = detected_cores;
-        *live_gpu_pct = gpu_util;
+        *gpu = query_macos_gpu_stats(gpu.cores);
+    }
+    if needs_audio {
+        *audio_devices = query_macos_audio_devices();
+    }
+    if needs_disk {
+        *disks = query_macos_disks();
     }
     if needs_xplane {
         xplane.ensure_subscribed();

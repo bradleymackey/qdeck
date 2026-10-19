@@ -64,8 +64,8 @@ fn main() -> Result<()> {
     println!("====================================================");
 
     let mut xplane = XPlaneClient::new(&cfg.xplane_addr);
-    let (mut gpu_cores, mut live_gpu_pct) = query_macos_gpu_stats(16);
-    println!("[QDECK] Detected GPU Cores: {}", gpu_cores);
+    let mut gpu = query_macos_gpu_stats(16);
+    println!("[QDECK] Detected GPU Cores: {}", gpu.cores);
 
     let mut sys = System::new_with_specifics(
         RefreshKind::nothing()
@@ -93,8 +93,7 @@ fn main() -> Result<()> {
                     &mut last_mtime,
                     &mut xplane,
                     &mut sys,
-                    &mut gpu_cores,
-                    &mut live_gpu_pct,
+                    &mut gpu,
                     &mut tick,
                     max_frames,
                 ) {

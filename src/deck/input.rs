@@ -1,5 +1,7 @@
 use crate::config::{ClickAction, QDeckConfig};
-use crate::telemetry::{request_ai_limits_refresh, toggle_airport_page, toggle_gemini_view};
+use crate::telemetry::{
+    request_ai_limits_refresh, toggle_airport_page, toggle_disk_volume, toggle_gemini_view,
+};
 use crate::xplane::XPlaneClient;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -69,6 +71,9 @@ pub(super) fn process_button_edges(
                         page + 1,
                         page_name
                     );
+                } else if matches!(norm_type.as_str(), "disk" | "storage" | "volume") {
+                    let idx = toggle_disk_volume();
+                    println!("[QDECK] Disk volume toggled -> index {}", idx);
                 }
 
                 match tile.click_action() {

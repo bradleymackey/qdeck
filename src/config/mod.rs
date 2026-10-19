@@ -231,7 +231,19 @@ mod tests {
             }
         }
 
-        // In dashboard mode: Key 3 is GPU, Key 4 is CPU
+        // In dashboard mode: Key 1 (Tile 2) is Memory, Key 2 (Tile 3) is Disk, Key 3 is GPU, Key 4 is CPU, Key 8 is Claude, Key 9 is Gemini, Key 10 (Tile 11) is Audio
+        assert_eq!(
+            cfg.tile_for_key(1, 5, 15, "dashboard", "fcu")
+                .unwrap()
+                .tile_type,
+            "memory"
+        );
+        assert_eq!(
+            cfg.tile_for_key(2, 5, 15, "dashboard", "fcu")
+                .unwrap()
+                .tile_type,
+            "disk"
+        );
         assert_eq!(
             cfg.tile_for_key(3, 5, 15, "dashboard", "fcu")
                 .unwrap()
@@ -243,6 +255,24 @@ mod tests {
                 .unwrap()
                 .tile_type,
             "cpu"
+        );
+        assert_eq!(
+            cfg.tile_for_key(8, 5, 15, "dashboard", "fcu")
+                .unwrap()
+                .tile_type,
+            "claude"
+        );
+        assert_eq!(
+            cfg.tile_for_key(9, 5, 15, "dashboard", "fcu")
+                .unwrap()
+                .tile_type,
+            "gemini"
+        );
+        assert_eq!(
+            cfg.tile_for_key(10, 5, 15, "dashboard", "fcu")
+                .unwrap()
+                .tile_type,
+            "audio"
         );
 
         // In xplane mode: Key 1 (0,1) is always the PANEL selector across all 4 panels

@@ -35,6 +35,23 @@ mode = "*"
 # Mode: "dashboard" (System Telemetry)
 # -----------------------------------------------------------------------------
 [[tiles]]
+type = "memory"
+position = "0,1"
+mode = "dashboard"
+label = "MEM"
+app = "Activity Monitor"
+warn_threshold = 75.0
+crit_threshold = 90.0
+
+[[tiles]]
+type = "disk"
+position = "0,2"
+mode = "dashboard"
+label = "DISK"
+warn_threshold = 75.0
+crit_threshold = 90.0
+
+[[tiles]]
 type = "gpu"
 position = "0,3"
 mode = "dashboard"
@@ -76,6 +93,12 @@ position = "2,1"
 mode = "dashboard"
 label = "LCY"
 airport = "EGLC"
+
+[[tiles]]
+type = "audio"
+position = "2,0"
+mode = "dashboard"
+label = "AUDIO"
 
 # -----------------------------------------------------------------------------
 # Mode: "xplane" — Secondary Panel Selector (Key 0,1)
