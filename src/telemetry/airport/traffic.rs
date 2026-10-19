@@ -11,6 +11,10 @@ pub const TRAFFIC_RADIUS_NM: u32 = 200;
 pub const RECENT_DEPARTURE_MINUTES: u32 = 45;
 /// Most entries kept per list.
 const MAX_FLIGHTS: usize = 12;
+/// Runway votes only count from aircraft this close to the airport...
+const MAX_ALIGNED_DISTANCE_NM: f64 = 6.0;
+/// ...and this close to the runway's extended centreline.
+const MAX_CENTRELINE_OFFSET_NM: f64 = 0.6;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Aircraft {
@@ -185,9 +189,11 @@ fn is_heading_towards(info: &AirportInfo, ac: &Aircraft, dist: f64) -> bool {
     })
 }
 
-/// Returns the runway end an aircraft is flying along, if it is low and close enough to be
-/// landing or taking off. Aircraft without a known route must sit on the extended centreline,
-/// which keeps helicopters and overflights from voting.
+/// Returns the runway end an aircraft is flying along, if it is on the extended centreline
+/// close to the airport: on final approach, on the take-off or landing roll, or just after
+/// take-off. Being on the centreline matters: arrivals fly a downwind leg parallel to the
+/// runway in the opposite direction before turning in (at London City about 4 nm off the
+/// centreline), and those legs must not vote for the reciprocal runway.
 fn aligned_runway_end(
     info: &AirportInfo,
     ac: &Aircraft,
@@ -203,10 +209,14 @@ fn aligned_runway_end(
     let close_and_low = if ac.on_ground {
         // Take-off or landing roll.
         dist <= 1.5 && gs >= 40.0
-    } else if has_route {
-        dist <= 8.0 && height.is_some_and(|h| h < 4000.0) && gs >= 70.0
     } else {
-        dist <= 5.0 && height.is_some_and(|h| h < 2500.0) && gs >= 90.0
+        // Aircraft without a known route must also be climbing or descending, which keeps
+        // level transits along the extended centreline (e.g. helicopters on the river) out.
+        let climbing_or_descending = ac.vert_rate_fpm.is_some_and(|r| r.abs() >= 300.0);
+        dist <= MAX_ALIGNED_DISTANCE_NM
+            && height.is_some_and(|h| h < 4000.0)
+            && gs >= 70.0
+            && (has_route || climbing_or_descending)
     };
     if !close_and_low {
         return None;
@@ -215,9 +225,8 @@ fn aligned_runway_end(
     info.runways
         .iter()
         .filter(|(le, he)| {
-            has_route
-                || ac.on_ground
-                || cross_track_nm((ac.lat, ac.lon), (le.lat, le.lon), (he.lat, he.lon)) <= 0.6
+            cross_track_nm((ac.lat, ac.lon), (le.lat, le.lon), (he.lat, he.lon))
+                <= MAX_CENTRELINE_OFFSET_NM
         })
         .flat_map(|(le, he)| [le, he])
         .map(|end| (end, angle_diff_deg(track, end.heading_deg)))
@@ -323,17 +332,48 @@ mod tests {
     }
 
     #[test]
+    fn test_downwind_leg_does_not_vote_for_reciprocal_runway() {
+        // Mirrors ITY238 at London City on 2026-10-19 (wind 090/12, runway 09 in use): a
+        // westbound downwind leg ~4 nm off the centreline, then final for 09, while a
+        // departure climbs out eastbound.
+        let info = parse_runway_rows(EGLC_RUNWAYS_CSV, "EGLC").unwrap();
+        let routes = parse_route_rows(EGLC_ROUTES_CSV.lines(), "EGLC");
+        let downwind = [
+            aircraft("CFE8NV", 51.5717, 0.12, Some(2600.0), 266.0, 273.0),
+            aircraft("CFE8NV", 51.5717, 0.02, Some(1700.0), 263.0, 273.0),
+            aircraft("CFE8NV", 51.5717, -0.03, Some(1700.0), 262.0, 273.0),
+        ];
+        assert!(
+            classify_traffic(&info, &routes, &downwind)
+                .runway_votes
+                .is_empty()
+        );
+
+        let final_and_climb_out = [
+            aircraft("CFE8NV", 51.5076, -0.02, Some(1100.0), 120.0, 93.0),
+            aircraft("CFE63BB", 51.5041, 0.09, Some(900.0), 140.0, 92.0),
+        ];
+        let votes = classify_traffic(&info, &routes, &final_and_climb_out).runway_votes;
+        assert_eq!(votes.len(), 2);
+        assert!(votes.iter().all(|(id, _)| id == "09"));
+    }
+
+    #[test]
     fn test_unrouted_traffic_needs_centreline() {
         let info = parse_runway_rows(EGLC_RUNWAYS_CSV, "EGLC").unwrap();
         let routes = HashMap::new();
         let mut on_centreline = aircraft("N123", 51.5055, 0.0, Some(1200.0), 130.0, 93.0);
-        let off_centreline = aircraft("N456", 51.53, 0.0, Some(1200.0), 130.0, 93.0);
+        on_centreline.vert_rate_fpm = Some(-700.0);
+        let mut off_centreline = aircraft("N456", 51.53, 0.0, Some(1200.0), 130.0, 93.0);
+        off_centreline.vert_rate_fpm = Some(-700.0);
         let mut heli = on_centreline.clone();
         heli.rotorcraft = true;
+        let mut level_transit = on_centreline.clone();
+        level_transit.vert_rate_fpm = Some(0.0);
         let picture = classify_traffic(
             &info,
             &routes,
-            &[on_centreline.clone(), off_centreline, heli],
+            &[on_centreline.clone(), off_centreline, heli, level_transit],
         );
         assert_eq!(picture.runway_votes, vec![("09".to_string(), 93.0)]);
 
