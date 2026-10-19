@@ -68,6 +68,15 @@ label = "GEMINI"
 warn_threshold = 60.0
 crit_threshold = 85.0
 
+# Airport ops: runway in use (EASTERLY/WESTERLY), expected arrivals and departures.
+# Click to cycle RWY -> ARR -> DEP. `airport` is any ICAO code (London City by default).
+[[tiles]]
+type = "airport"
+position = "2,1"
+mode = "dashboard"
+label = "LCY"
+airport = "EGLC"
+
 # -----------------------------------------------------------------------------
 # Mode: "xplane" — Secondary Panel Selector (Key 0,1)
 # Toggles between:

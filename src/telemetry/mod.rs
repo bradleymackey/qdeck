@@ -1,9 +1,14 @@
 pub mod ai_limits;
+pub mod airport;
 
 pub use ai_limits::{
     AiLimitsState, ClaudeLimits, GeminiLimits, QuotaWindowPair, current_ai_limits,
     fetch_claude_limits, fetch_gemini_limits, parse_claude_usage_json,
     parse_gemini_quota_summary_json, request_ai_limits_refresh, toggle_gemini_view,
+};
+pub use airport::{
+    AirportFlight, AirportStatus, DEFAULT_AIRPORT_ICAO, RunwayInUse, RunwaySource, Wind,
+    current_airport_status, note_airport_tile_active, toggle_airport_page,
 };
 
 use crate::widgets::TelemetrySnapshot;
@@ -72,6 +77,7 @@ pub fn is_dynamic_telemetry_tile(tile_type: &str) -> bool {
             | "claude_limits"
             | "gemini"
             | "gemini_limits"
+            | "airport"
             | "ops_status"
             | "status"
             | "a320_fcu"
@@ -89,6 +95,7 @@ pub fn build_snapshot<'a>(
     live_gpu_pct: f32,
     claude_limits: QuotaWindowPair,
     gemini_limits: GeminiLimits,
+    airport: AirportStatus,
     active_mode: &'a str,
     next_mode: &'a str,
     mode_index: usize,
@@ -144,6 +151,7 @@ pub fn build_snapshot<'a>(
         swap_used_pct,
         claude_limits,
         gemini_limits,
+        airport,
         active_mode,
         next_mode,
         mode_index,
@@ -182,6 +190,7 @@ mod tests {
         assert!(is_dynamic_telemetry_tile("gpu"));
         assert!(is_dynamic_telemetry_tile("claude"));
         assert!(is_dynamic_telemetry_tile("gemini"));
+        assert!(is_dynamic_telemetry_tile("airport"));
         assert!(is_dynamic_telemetry_tile("a320_fcu"));
         assert!(!is_dynamic_telemetry_tile("mode"));
         assert!(!is_dynamic_telemetry_tile("panel"));

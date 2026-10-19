@@ -1,3 +1,4 @@
+use crate::telemetry::DEFAULT_AIRPORT_ICAO;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -10,7 +11,7 @@ pub struct TileConfig {
     pub row: Option<u8>,
     /// Explicit 0-based column index
     pub col: Option<u8>,
-    /// Tile type: "mode", "panel", "cpu", "gpu", "memory", "a320_fcu", "ops_status", "launcher"
+    /// Tile type: "mode", "panel", "cpu", "gpu", "memory", "a320_fcu", "ops_status", "launcher", "airport"
     #[serde(rename = "type", alias = "widget", alias = "kind")]
     pub tile_type: String,
     /// Optional mode this tile belongs to (e.g. "dashboard", "xplane", or "*" for all modes)
@@ -32,6 +33,8 @@ pub struct TileConfig {
     pub warn_threshold: Option<f32>,
     /// Optional per-tile critical threshold override
     pub crit_threshold: Option<f32>,
+    /// ICAO code for `airport` tiles (defaults to London City, `EGLC`)
+    pub airport: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +64,16 @@ impl TileConfig {
             self.tile_type.trim().to_ascii_lowercase().as_str(),
             "panel" | "panel_selector" | "submode"
         )
+    }
+
+    /// ICAO code of the airport an `airport` tile tracks.
+    pub fn airport_icao(&self) -> String {
+        self.airport
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(DEFAULT_AIRPORT_ICAO)
+            .to_ascii_uppercase()
     }
 
     pub fn is_a320_fcu(&self) -> bool {
@@ -221,6 +234,7 @@ mod tests {
             on_click: None,
             warn_threshold: None,
             crit_threshold: None,
+            airport: None,
         }
     }
 

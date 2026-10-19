@@ -11,9 +11,9 @@ This file documents the architectural conventions, hardware rules, cockpit desig
   - Place all domain logic inside the library crate ([`src/lib.rs`](src/lib.rs)) organized into focused sub-modules:
     - [`src/config/`](src/config/) — TOML schema (`mod.rs`), theme resolution (`theme.rs`), default config template (`defaults.rs`), and tile/sub-panel matching (`tile.rs`).
     - [`src/xplane/`](src/xplane/) — X-Plane 12 client coordinator (`mod.rs`), Local WebAPI client (`webapi.rs`), state & dataref tables (`state/{mod.rs, datarefs.rs}`), and per-panel command dispatchers (`commands/{mod.rs, fcu.rs, apu.rs, flt.rs, sys.rs}`).
-    - [`src/widgets/`](src/widgets/) — Tile rendering split across [`system.rs`](src/widgets/system.rs), [`ai_limits.rs`](src/widgets/ai_limits.rs), [`navigation.rs`](src/widgets/navigation.rs), [`icons.rs`](src/widgets/icons.rs), and Airbus cockpit submodules in [`src/widgets/airbus/`](src/widgets/airbus/) (`mod.rs`, `fcu.rs`, `apu.rs`, `surfaces.rs`, `brakes.rs`, `korry.rs`).
+    - [`src/widgets/`](src/widgets/) — Tile rendering split across [`system.rs`](src/widgets/system.rs), [`ai_limits.rs`](src/widgets/ai_limits.rs), [`airport.rs`](src/widgets/airport.rs), [`navigation.rs`](src/widgets/navigation.rs), [`icons.rs`](src/widgets/icons.rs), and Airbus cockpit submodules in [`src/widgets/airbus/`](src/widgets/airbus/) (`mod.rs`, `fcu.rs`, `apu.rs`, `surfaces.rs`, `brakes.rs`, `korry.rs`).
     - [`src/font/`](src/font/) — `5×7` and `3×5` bitmap font rasterizers (`mod.rs`), glyph tables (`glyphs.rs`), and geometric primitives (`primitives.rs`).
-    - [`src/telemetry/`](src/telemetry/) — macOS system metrics collection (`mod.rs`) and background Claude & Google Gemini quota polling (`ai_limits.rs`).
+    - [`src/telemetry/`](src/telemetry/) — macOS system metrics collection (`mod.rs`) background Claude & Google Gemini quota polling (`ai_limits.rs`), and the airport ops poller (`airport/`: live ADS-B traffic + METAR, with runway and route tables bundled from [`data/airport/`](data/airport/)).
     - [`src/macos/`](src/macos/) — macOS screen-lock/display-sleep detection (`lock.rs`), `launchd` service management (`service.rs`), and POSIX signals (`signals.rs`).
     - [`src/deck/`](src/deck/) — Stream Deck session loop (`mod.rs`), USB device management (`device.rs`), button input handling (`input.rs`), and LCD rendering (`render.rs`).
 - **Avoid Monolithic Files**:
@@ -65,6 +65,9 @@ This file documents the architectural conventions, hardware rules, cockpit desig
   - Do **not** store application configuration in `Cargo.toml` (`[package.metadata.qdeck]`) or repo-local `.toml` files.
   - Runtime configuration is driven purely by **`~/.config/qdeck/config.toml`** (hot-reloaded automatically on change, and bootstrapped on first run from [`src/config/defaults.rs`](src/config/defaults.rs) if missing).
   - When adding new default tiles or panels, update both [`src/config/defaults.rs`](src/config/defaults.rs) and the user's [`~/.config/qdeck/config.toml`](file:///Users/bradley/.config/qdeck/config.toml).
+- **Bundled Reference Data, Never Runtime Downloads**:
+  - Static reference data (airport runways and callsign routes) is committed in [`data/airport/`](data/airport/) and compiled in with `include_str!`, so it can never fail at runtime. Only genuinely live data (ADS-B traffic, METAR) is fetched while running.
+  - Refresh the bundled tables with [`scripts/update-airport-data.sh`](scripts/update-airport-data.sh) (all airports worldwide, trimmed to the columns qdeck uses), then run `cargo test` and commit.
 - **Build & Test Before Deploying**:
   - Build artifacts are written to `./build/` (configured in [`.cargo/config.toml`](.cargo/config.toml)).
   - Always run `cargo test` (unit + integration tests in [`tests/integration_test.rs`](tests/integration_test.rs)) and `cargo clippy --all-targets` before building the release binary (`cargo build --release`).

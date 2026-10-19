@@ -39,6 +39,64 @@ pub fn draw_arrow_down(
     draw_triangle_down(img, cx, top_y + stem_h, head_h, color);
 }
 
+/// Draws a bold arrow centred at `(cx, cy)` pointing along a compass `heading_deg`
+/// (`0` = up/north, `90` = right/east), `len` pixels from tail to tip.
+pub fn draw_heading_arrow(
+    img: &mut RgbImage,
+    cx: i32,
+    cy: i32,
+    len: i32,
+    heading_deg: f64,
+    color: Rgb<u8>,
+) {
+    let (dx, dy) = (
+        heading_deg.to_radians().sin(),
+        -heading_deg.to_radians().cos(),
+    );
+    let half = f64::from(len) / 2.0;
+    let head_len = (f64::from(len) * 0.4).max(4.0);
+    let head_half_w = head_len * 0.7;
+    let (tip_x, tip_y) = (f64::from(cx) + dx * half, f64::from(cy) + dy * half);
+
+    // 3px shaft from the tail to the base of the head.
+    let shaft = (f64::from(len) - head_len).max(1.0);
+    let steps = (shaft * 2.0).ceil() as i32;
+    for i in 0..=steps {
+        let t = f64::from(i) / f64::from(steps.max(1)) * shaft - half;
+        let x = (f64::from(cx) + dx * t).round() as i32;
+        let y = (f64::from(cy) + dy * t).round() as i32;
+        fill_rect(img, x - 1, y - 1, 3, 3, color);
+    }
+
+    // Filled triangular head.
+    let (base_x, base_y) = (tip_x - dx * head_len, tip_y - dy * head_len);
+    let corners = [
+        (tip_x, tip_y),
+        (base_x - dy * head_half_w, base_y + dx * head_half_w),
+        (base_x + dy * head_half_w, base_y - dx * head_half_w),
+    ];
+    let edge = |a: (f64, f64), b: (f64, f64), p: (f64, f64)| {
+        (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0)
+    };
+    let min_x = corners.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor() as i32;
+    let max_x = corners.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil() as i32;
+    let min_y = corners.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor() as i32;
+    let max_y = corners.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil() as i32;
+    for py in min_y..=max_y {
+        for px in min_x..=max_x {
+            let p = (f64::from(px), f64::from(py));
+            let e = [
+                edge(corners[0], corners[1], p),
+                edge(corners[1], corners[2], p),
+                edge(corners[2], corners[0], p),
+            ];
+            if e.iter().all(|v| *v >= -0.5) || e.iter().all(|v| *v <= 0.5) {
+                put_px(img, px, py, color);
+            }
+        }
+    }
+}
+
 /// Draws a 4-notch Airbus flap position progress bar (`1`, `2`, `3`, `FULL`).
 pub fn draw_flap_notches(
     img: &mut RgbImage,
@@ -138,5 +196,21 @@ mod tests {
 
         let lit = img.pixels().filter(|p| p.0 != [0, 0, 0]).count();
         assert!(lit > 80);
+    }
+
+    #[test]
+    fn test_heading_arrow_points_along_heading() {
+        let green = Rgb([0, 255, 65]);
+        // Lit pixels in a column: the wide head sits on the side the arrow points to.
+        let column_lit = |heading: f64, x: u32| {
+            let mut img = RgbImage::from_pixel(72, 72, Rgb([0, 0, 0]));
+            draw_heading_arrow(&mut img, 36, 36, 24, heading, green);
+            (0..72)
+                .filter(|&y| img.get_pixel(x, y).0 != [0, 0, 0])
+                .count()
+        };
+        assert!(column_lit(273.0, 30) > column_lit(273.0, 42));
+        assert!(column_lit(93.0, 42) > column_lit(93.0, 30));
+        assert!(column_lit(0.0, 36) > 20);
     }
 }

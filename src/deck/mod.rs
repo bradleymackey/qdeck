@@ -8,7 +8,8 @@ pub use render::{apply_mode_layout, render_key_to_deck};
 use crate::config::{QDeckConfig, ResolvedTheme};
 use crate::macos::{is_macos_screen_locked_or_asleep, is_shutdown_requested};
 use crate::telemetry::{
-    build_snapshot, current_ai_limits, is_dynamic_telemetry_tile, query_macos_gpu_stats,
+    build_snapshot, current_ai_limits, current_airport_status, is_dynamic_telemetry_tile,
+    note_airport_tile_active, query_macos_gpu_stats,
 };
 use crate::widgets::TelemetrySnapshot;
 use crate::xplane::{A320FcuState, XPlaneClient};
@@ -76,6 +77,7 @@ impl ActiveLayout {
             live_gpu_pct,
             ai_limits.claude,
             ai_limits.gemini,
+            current_airport_status(),
             &self.active_mode,
             &self.next_mode,
             mode_idx,
@@ -480,6 +482,7 @@ fn refresh_active_telemetry(
                 "gpu" => needs_gpu = true,
                 "memory" | "ram" => needs_mem = true,
                 "a320_fcu" | "xplane" | "fcu" | "a320" => needs_xplane = true,
+                "airport" => note_airport_tile_active(&t.airport_icao()),
                 "ops_status" | "status" => {
                     needs_cpu = true;
                     needs_gpu = true;

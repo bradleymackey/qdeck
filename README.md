@@ -13,6 +13,10 @@ A tactical, phosphor-green operations-center controller for the **Elgato Stream 
   - Live CPU per-core bar graph and GPU core-grid utilization tiles (`0,3` and `0,4`).
   - **Claude Usage Limits (`1,3` / Tile `09`)**: Displays both 5-hour Session (`SES`) and 7-day Weekly (`WK`) utilization percentages and 15-segment progress bars via Anthropic's OAuth usage API.
   - **Google Gemini Usage Limits (`1,4` / Tile `10`)**: Cycles across 3 pages on click — `GEMINI` (`1/3`), `ARGON` (`2/3`), and `CLD/GPT` (`3/3`) — with each page showing both 5-hour Session (`SES`) and 7-day Weekly (`WK`) utilization percentages and 15-segment progress bars via the local Antigravity language server (`RetrieveUserQuotaSummary`).
+  - **Airport Ops (`2,1`, London City `EGLC` by default)**: Cycles across 3 pages on click — runway in use (`1/3`: ident, direction arrow, `EASTERLY`/`WESTERLY` operations, arrival/departure counts, METAR wind), expected arrivals (`2/3`: callsign, origin, ETA in minutes) and departures (`3/3`: `GND` for aircraft taxiing or at the stand, otherwise minutes since take-off). Set `airport = "<ICAO>"` on the tile for any other airport. Built only from open data:
+    - Live traffic from the [adsb.fi open data API](https://github.com/adsbfi/opendata) (adsb.lol as fallback), polled every 30 s only while the tile is on screen.
+    - The runway in use comes from aircraft seen landing or taking off in the last 30 minutes (`ADS-B`); with no recent traffic it falls back to the runway end with the most headwind in the [aviationweather.gov](https://aviationweather.gov/data/api/) METAR (`WIND`, shown in amber).
+    - Runway geometry ([OurAirports](https://ourairports.com/data/), public domain) and callsign routes ([VRS standing data](https://github.com/vradarserver/standing-data), CC0) for every airport are bundled into the binary from [`data/airport/`](data/airport/), so they never fail at runtime. Refresh them with `./scripts/update-airport-data.sh` every few weeks and commit the result.
 - **4-Panel Airbus Cockpit Integration for X-Plane 12 (`xplane` page)**:
   - **Key `#1` (`BACK`)**: Returns to the `root` system telemetry page.
   - **Key `#2` (`PNL <ACTIVE> / NEXT: <NEXT>`)**: Cycles through 4 Airbus sub-panels across Keys `3–15`:
@@ -76,10 +80,17 @@ qdeck/
 │   │   └── signals.rs        # POSIX SIGINT/SIGTERM/SIGHUP shutdown flag handling
 │   ├── telemetry/
 │   │   ├── mod.rs            # macOS CPU, RAM, GPU collectors & TelemetrySnapshot builder
-│   │   └── ai_limits.rs      # Background Claude & Google Gemini session/weekly quota poller
+│   │   ├── ai_limits.rs      # Background Claude & Google Gemini session/weekly quota poller
+│   │   └── airport/
+│   │       ├── mod.rs        # Background airport poller (ADS-B + METAR) and AirportStatus
+│   │       ├── reference.rs  # Bundled runway & route tables (data/airport/) and parsers
+│   │       ├── runway.rs     # Runway-in-use from traffic votes, METAR wind fallback
+│   │       ├── traffic.rs    # ADS-B parsing and arrival/departure/runway classification
+│   │       └── geo.rs        # Distance, bearing, and centreline maths
 │   ├── widgets/
 │   │   ├── mod.rs            # Tile dispatcher (system, AI limits, navigation, Airbus controls)
 │   │   ├── ai_limits.rs      # Dual-bar Session (SES) & Weekly (WK) Claude/Gemini tiles
+│   │   ├── airport.rs        # 3-page airport tile (runway in use, arrivals, departures)
 │   │   ├── icons.rs          # Cockpit vector icons (arrows, brake, fan, spoiler, notches)
 │   │   ├── navigation.rs     # Mode selector and sub-panel switcher tiles
 │   │   ├── system.rs         # System telemetry tiles (CPU, GPU, Memory, Ops Status)
@@ -102,6 +113,9 @@ qdeck/
 │           ├── apu.rs        # Panel 2 (Electrical, APU & Engine Prep) command handlers
 │           ├── flt.rs        # Panel 3 (Gear, Brakes, Flaps & Spoilers) command handlers
 │           └── sys.rs        # Panel 4 (Lights, Anti-Ice, ADIRS, Baro & TCAS) command handlers
+├── data/airport/             # Bundled worldwide runways.csv & routes.csv for the airport tile
+├── scripts/
+│   └── update-airport-data.sh # Refreshes data/airport/ from OurAirports and VRS standing data
 └── tests/
     └── integration_test.rs   # End-to-end config, panel cycling, rendering & command tests
 ```

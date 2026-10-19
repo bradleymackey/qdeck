@@ -1,5 +1,5 @@
 use qdeck::config::{ClickAction, QDeckConfig};
-use qdeck::telemetry::{ClaudeLimits, GeminiLimits};
+use qdeck::telemetry::{AirportStatus, ClaudeLimits, GeminiLimits};
 use qdeck::widgets::{TelemetrySnapshot, render_tile_image};
 use qdeck::xplane::A320FcuState;
 use qdeck::xplane::commands::dispatch_control;
@@ -61,6 +61,10 @@ fn test_full_deck_matrix_across_all_modes_and_panels() {
                             },
                             page_index: (m_idx + p_idx) as u8 % 3,
                             available: true,
+                        },
+                        airport: AirportStatus {
+                            page_index: (m_idx + p_idx) as u8 % 3,
+                            ..AirportStatus::default()
                         },
                         active_mode: mode,
                         next_mode: &modes[(m_idx + 1) % modes.len()],

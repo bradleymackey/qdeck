@@ -1,11 +1,13 @@
 pub mod ai_limits;
 pub mod airbus;
+pub mod airport;
 pub mod icons;
 pub mod navigation;
 pub mod system;
 
 pub use ai_limits::{render_claude_limits_tile, render_gemini_limits_tile};
 pub use airbus::render_a320_fcu_tile;
+pub use airport::render_airport_tile;
 pub use navigation::{
     render_launcher_tile, render_mode_tile, render_panel_tile, render_standby_tile,
 };
@@ -15,7 +17,7 @@ pub use system::{
 };
 
 use crate::config::{ResolvedTheme, TileConfig};
-use crate::telemetry::{ClaudeLimits, GeminiLimits};
+use crate::telemetry::{AirportStatus, ClaudeLimits, GeminiLimits};
 use crate::xplane::A320FcuState;
 use image::RgbImage;
 
@@ -30,6 +32,7 @@ pub struct TelemetrySnapshot<'a> {
     pub swap_used_pct: f32,
     pub claude_limits: ClaudeLimits,
     pub gemini_limits: GeminiLimits,
+    pub airport: AirportStatus,
     pub active_mode: &'a str,
     pub next_mode: &'a str,
     pub mode_index: usize,
@@ -71,6 +74,7 @@ pub fn render_tile_image(
         "gemini" | "gemini_limits" => {
             render_gemini_limits_tile(width, height, tile, theme, snapshot, is_highlighted)
         }
+        "airport" => render_airport_tile(width, height, tile, theme, snapshot, is_highlighted),
         "a320_fcu" | "xplane" | "fcu" | "a320" => {
             render_a320_fcu_tile(width, height, tile, theme, snapshot, is_highlighted)
         }
@@ -88,6 +92,37 @@ pub fn render_tile_image(
 mod tests {
     use super::*;
     use crate::config::QDeckConfig;
+
+    /// A plausible dashboard snapshot carrying the given airport status.
+    pub(super) fn snapshot_with_airport(
+        fcu: &A320FcuState,
+        airport: AirportStatus,
+    ) -> TelemetrySnapshot<'_> {
+        TelemetrySnapshot {
+            total_cpu_pct: 42.0,
+            core_usages: &[12.0, 35.0, 68.0, 91.0],
+            gpu_pct: 55.0,
+            gpu_cores: 40,
+            mem_used_pct: 62.0,
+            mem_used_gb: 20.0,
+            mem_total_gb: 32.0,
+            swap_used_pct: 10.0,
+            claude_limits: ClaudeLimits::default(),
+            gemini_limits: GeminiLimits::default(),
+            airport,
+            active_mode: "dashboard",
+            next_mode: "xplane",
+            mode_index: 0,
+            total_modes: 2,
+            active_panel: "fcu",
+            next_panel: "apu",
+            panel_index: 0,
+            total_panels: 4,
+            fcu,
+            tick: 1,
+            demo_mode_active: false,
+        }
+    }
 
     #[test]
     fn test_all_builtin_tiles_render_72x72_non_blank() {
@@ -128,6 +163,7 @@ mod tests {
                 page_index: 0,
                 available: true,
             },
+            airport: AirportStatus::default(),
             active_mode: "xplane",
             next_mode: "dashboard",
             mode_index: 1,
