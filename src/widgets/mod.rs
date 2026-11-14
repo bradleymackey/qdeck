@@ -201,6 +201,7 @@ mod tests {
             claude_limits: ClaudeLimits {
                 session_pct: 5.0,
                 weekly_pct: 1.0,
+                fable_pct: Some(3.0),
                 available: true,
             },
             gemini_limits: GeminiLimits {

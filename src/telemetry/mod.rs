@@ -135,7 +135,7 @@ pub fn build_snapshot<'a>(
     sys: &System,
     core_buf: &'a mut Vec<f32>,
     gpu: GpuStats,
-    claude_limits: QuotaWindowPair,
+    claude_limits: ClaudeLimits,
     gemini_limits: GeminiLimits,
     airport: AirportStatus,
     audio_devices: &'a AudioDevices,

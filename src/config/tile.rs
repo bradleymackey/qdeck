@@ -35,6 +35,9 @@ pub struct TileConfig {
     pub crit_threshold: Option<f32>,
     /// ICAO code for `airport` tiles (defaults to London City, `EGLC`)
     pub airport: Option<String>,
+    /// The two bars of a `claude` tile, top then bottom: "session", "weekly" or "fable"
+    /// (defaults to `["session", "weekly"]`)
+    pub bars: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,6 +238,7 @@ mod tests {
             warn_threshold: None,
             crit_threshold: None,
             airport: None,
+            bars: None,
         }
     }
 

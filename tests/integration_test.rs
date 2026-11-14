@@ -85,6 +85,7 @@ fn test_full_deck_matrix_across_all_modes_and_panels() {
                         claude_limits: ClaudeLimits {
                             session_pct: 12.0,
                             weekly_pct: 34.0,
+                            fable_pct: Some(56.0),
                             available: true,
                         },
                         gemini_limits: GeminiLimits {

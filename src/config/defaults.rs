@@ -74,6 +74,7 @@ type = "claude"
 position = "1,3"
 mode = "dashboard"
 label = "CLAUDE"
+# bars = ["fable", "weekly"]  # top + bottom bar: "session", "weekly" or "fable" (default: session + weekly)
 warn_threshold = 60.0
 crit_threshold = 85.0
 

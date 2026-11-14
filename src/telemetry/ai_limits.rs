@@ -19,7 +19,18 @@ pub struct QuotaWindowPair {
     pub available: bool,
 }
 
-pub type ClaudeLimits = QuotaWindowPair;
+/// Claude utilization percentages (`0.0..=100.0`) from Anthropic's OAuth usage endpoint.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ClaudeLimits {
+    /// 5-hour session utilization percentage
+    pub session_pct: f32,
+    /// 7-day weekly utilization percentage (all models)
+    pub weekly_pct: f32,
+    /// 7-day weekly utilization percentage scoped to Fable, when the account reports one
+    pub fable_pct: Option<f32>,
+    /// Whether live quota telemetry has been successfully retrieved
+    pub available: bool,
+}
 
 /// Utilization percentages across all 3 Google Gemini / Antigravity quota groups
 /// returned by `RetrieveUserQuotaSummary`:
@@ -39,7 +50,7 @@ pub struct GeminiLimits {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AiLimitsState {
-    pub claude: QuotaWindowPair,
+    pub claude: ClaudeLimits,
     pub gemini: GeminiLimits,
 }
 
@@ -116,8 +127,8 @@ pub fn request_ai_limits_refresh() {
     }
 }
 
-/// Fetches Claude session (`five_hour`) and weekly (`seven_day`) utilization from Anthropic's OAuth usage endpoint.
-pub fn fetch_claude_limits() -> Option<QuotaWindowPair> {
+/// Fetches Claude session (`five_hour`), weekly (`seven_day`) and Fable weekly utilization from Anthropic's OAuth usage endpoint.
+pub fn fetch_claude_limits() -> Option<ClaudeLimits> {
     let token = read_claude_oauth_token()?;
     let auth_header = format!("Authorization: Bearer {token}");
     let output = Command::new("curl")
@@ -169,15 +180,58 @@ fn read_claude_oauth_token() -> Option<String> {
     extract_json_string_field(&raw, "accessToken")
 }
 
-/// Parses Anthropic `/api/oauth/usage` JSON for `five_hour.utilization` and `seven_day.utilization`.
-pub fn parse_claude_usage_json(json: &str) -> Option<QuotaWindowPair> {
+/// Parses Anthropic `/api/oauth/usage` JSON for `five_hour.utilization`, `seven_day.utilization`
+/// and the Fable-scoped weekly limit.
+pub fn parse_claude_usage_json(json: &str) -> Option<ClaudeLimits> {
     let session_pct = extract_nested_f32(json, "\"five_hour\"", "\"utilization\"")?;
     let weekly_pct = extract_nested_f32(json, "\"seven_day\"", "\"utilization\"").unwrap_or(0.0);
 
-    Some(QuotaWindowPair {
+    Some(ClaudeLimits {
         session_pct: session_pct.clamp(0.0, 100.0),
         weekly_pct: weekly_pct.clamp(0.0, 100.0),
+        fable_pct: parse_claude_model_weekly_pct(json, "fable"),
         available: true,
+    })
+}
+
+/// Reads the weekly limit scoped to one model family: the `limits` array entry whose
+/// `scope.model` names it, else the flat `seven_day_<model>.utilization` meter.
+fn parse_claude_model_weekly_pct(json: &str, model: &str) -> Option<f32> {
+    let root: serde_json::Value = serde_json::from_str(json).ok()?;
+    let number = |v: &serde_json::Value| {
+        v.as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+            .map(|n| (n as f32).clamp(0.0, 100.0))
+    };
+
+    let from_array = root
+        .get("limits")
+        .and_then(|l| l.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|entry| {
+            ["group", "kind"].iter().any(|key| {
+                entry
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| s.to_ascii_lowercase().starts_with("weekly"))
+            })
+        })
+        .filter(|entry| {
+            let scope_model = entry.get("scope").and_then(|s| s.get("model"));
+            ["display_name", "id"].iter().any(|key| {
+                scope_model
+                    .and_then(|m| m.get(key))
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| s.to_ascii_lowercase().contains(model))
+            })
+        })
+        .find_map(|entry| entry.get("percent").and_then(number));
+
+    from_array.or_else(|| {
+        root.get(format!("seven_day_{model}"))
+            .and_then(|m| m.get("utilization"))
+            .and_then(number)
     })
 }
 
@@ -415,6 +469,32 @@ mod tests {
         assert!(limits.available);
         assert!((limits.session_pct - 14.5).abs() < 0.01);
         assert!((limits.weekly_pct - 42.0).abs() < 0.01);
+        assert_eq!(limits.fable_pct, None);
+    }
+
+    #[test]
+    fn test_parse_claude_fable_weekly_limit() {
+        let sample = r#"{
+            "five_hour": {"utilization": 11.0, "resets_at": "2026-10-18T15:30:00Z"},
+            "seven_day": {"utilization": 9.0, "resets_at": "2026-10-23T09:00:00Z"},
+            "limits": [
+                {"kind": "session", "group": "session", "percent": 11, "scope": null},
+                {"kind": "weekly_all", "group": "weekly", "percent": 9, "scope": null},
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 31.5,
+                 "scope": {"model": {"id": "fake-opus-4", "display_name": "Claude Opus 4"}, "surface": null}},
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 5,
+                 "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null}}
+            ]
+        }"#;
+        let limits = parse_claude_usage_json(sample).expect("Should parse Claude usage JSON");
+        assert_eq!(limits.fable_pct, Some(5.0));
+
+        let flat = r#"{
+            "five_hour": {"utilization": 1.0},
+            "seven_day_fable": {"utilization": 64.0, "resets_at": null}
+        }"#;
+        let limits = parse_claude_usage_json(flat).expect("Should parse flat Claude usage JSON");
+        assert_eq!(limits.fable_pct, Some(64.0));
     }
 
     #[test]

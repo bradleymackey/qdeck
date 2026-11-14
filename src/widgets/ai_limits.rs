@@ -4,9 +4,20 @@ use crate::font::{
     draw_hline, draw_rect_border, draw_text_3x5, draw_text_5x7, fill_rect, scale_color,
     text_width_5x7,
 };
+use crate::telemetry::ClaudeLimits;
 use image::RgbImage;
 
-/// Renders a Claude usage limits tile showing both 5-hour Session (`SES`) and 7-day Weekly (`WK`) utilization.
+/// Resolves one `bars` entry of a `claude` tile to its row tag and utilization.
+fn claude_bar(name: &str, claude: &ClaudeLimits) -> (&'static str, Option<f32>) {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "fable" | "fbl" => ("FBL", claude.fable_pct),
+        "weekly" | "week" | "wk" => ("WK", Some(claude.weekly_pct)),
+        _ => ("SES", Some(claude.session_pct)),
+    }
+}
+
+/// Renders a Claude usage limits tile with two bars chosen by the tile's `bars` setting:
+/// 5-hour Session (`SES`), 7-day Weekly (`WK`) or 7-day Fable (`FBL`). Defaults to `SES` + `WK`.
 pub fn render_claude_limits_tile(
     width: u32,
     height: u32,
@@ -17,6 +28,9 @@ pub fn render_claude_limits_tile(
 ) -> RgbImage {
     let claude = telemetry.claude_limits;
     let header = tile.label.as_deref().unwrap_or("CLAUDE");
+    let bars = tile.bars.as_deref().unwrap_or_default();
+    let (row1_tag, row1_val) = claude_bar(bars.first().map_or("session", String::as_str), &claude);
+    let (row2_tag, row2_val) = claude_bar(bars.get(1).map_or("weekly", String::as_str), &claude);
     render_dual_limit_tile(
         width,
         height,
@@ -24,10 +38,10 @@ pub fn render_claude_limits_tile(
         theme,
         header,
         None,
-        "SES",
-        claude.session_pct,
-        "WK",
-        claude.weekly_pct,
+        row1_tag,
+        row1_val,
+        row2_tag,
+        row2_val,
         claude.available,
         telemetry.tick,
         telemetry.demo_mode_active,
@@ -63,9 +77,9 @@ pub fn render_gemini_limits_tile(
         header,
         Some(badge),
         "SES",
-        pair.session_pct,
+        Some(pair.session_pct),
         "WK",
-        pair.weekly_pct,
+        Some(pair.weekly_pct),
         gem.available,
         telemetry.tick,
         telemetry.demo_mode_active,
@@ -82,9 +96,9 @@ fn render_dual_limit_tile(
     header_label: &str,
     page_badge: Option<&str>,
     row1_tag: &str,
-    row1_val: f32,
+    row1_val: Option<f32>,
     row2_tag: &str,
-    row2_val: f32,
+    row2_val: Option<f32>,
     limits_available: bool,
     tick: u64,
     demo_mode_active: bool,
@@ -106,18 +120,21 @@ fn render_dual_limit_tile(
     let warn = tile.warn_threshold.unwrap_or(theme.warn_threshold);
     let crit = tile.crit_threshold.unwrap_or(theme.crit_threshold);
 
-    let (r1_pct, r2_pct, available) = if demo_mode_active {
+    // A row with no value (a limit the account does not report) renders as `--%`.
+    let (r1_pct, r2_pct, r1_available, r2_available) = if demo_mode_active {
         let phase = (tick as f32) * 0.65;
         let sim_1 = (20.0 + ((phase * 0.9).sin() * 0.5 + 0.5) * 75.0).clamp(5.0, 96.0);
         let sim_2 = (30.0 + ((phase * 0.6 + 1.2).sin() * 0.5 + 0.5) * 65.0).clamp(10.0, 95.0);
-        (sim_1, sim_2, true)
+        (sim_1, sim_2, true, true)
     } else {
         (
-            row1_val.clamp(0.0, 100.0),
-            row2_val.clamp(0.0, 100.0),
-            limits_available,
+            row1_val.unwrap_or(0.0).clamp(0.0, 100.0),
+            row2_val.unwrap_or(0.0).clamp(0.0, 100.0),
+            limits_available && row1_val.is_some(),
+            limits_available && row2_val.is_some(),
         )
     };
+    let available = r1_available || r2_available;
 
     let peak_pct = r1_pct.max(r2_pct);
     let header_color = if available {
@@ -144,12 +161,30 @@ fn render_dual_limit_tile(
 
     // Row 1
     draw_limit_row(
-        &mut img, w, 18, 28, row1_tag, r1_pct, available, warn, crit, theme,
+        &mut img,
+        w,
+        18,
+        28,
+        row1_tag,
+        r1_pct,
+        r1_available,
+        warn,
+        crit,
+        theme,
     );
 
     // Row 2
     draw_limit_row(
-        &mut img, w, 44, 54, row2_tag, r2_pct, available, warn, crit, theme,
+        &mut img,
+        w,
+        44,
+        54,
+        row2_tag,
+        r2_pct,
+        r2_available,
+        warn,
+        crit,
+        theme,
     );
 
     img
